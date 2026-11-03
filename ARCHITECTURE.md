@@ -108,12 +108,24 @@ POST_NOTIFICATIONS（同步结果通知）
 RECEIVE_BOOT_COMPLETED（重排周期任务）
 ```
 
-## 实施顺序
+## 实施状态（已完成并验证）
 
-1. 工程骨架 + 主题 + 设置/凭据存储
-2. Nextcloud 客户端（status、Login Flow v2、PROPFIND/PUT/GET/DELETE/MOVE）+ 单元测试（Mock Server）
-3. 扫描/对比/计划器 + 测试用例（用本地临时目录 + 假远程仓库）
-4. 传输执行 + sqlite 基线 + 冲突处理
-5. UI：登录、配对管理、手动同步、进度、冲突页、日志
-6. WorkManager 周期 + 通知
-7. 真机联调（Android 16 设备），出 debug APK
+1. ✅ 工程骨架 + Material 3 主题 + sqlite 基线 + Keystore 凭据存储
+2. ✅ Nextcloud 客户端：`status.php`、Login Flow v2、PROPFIND（Depth 0/1）、PUT/GET/DELETE/MKCOL/MOVE、ETag 条件请求（412 检测）
+3. ✅ 扫描器 + 三方合并计划器（22 个纯单元测试覆盖删除/冲突/大小写/目录级联等）
+4. ✅ 执行引擎：流式上传下载、临时文件原子替换、基线批量落库、删除安全阀、冲突保留两份
+5. ✅ UI：登录、配对管理、远程目录浏览、同步进度、冲突处理、日志、设置
+6. ✅ WorkManager 周期任务（15 分钟起）、通知、仅 Wi-Fi 门控
+7. ✅ 真机验证（Android 16 / arm64）：
+   - `test/client_live_test.dart`：真实服务器上的 WebDAV 生命周期（含 UTF-8 文件名、412）
+   - `test/engine_live_test.dart`：真实服务器上的完整引擎流程（上传/幂等/下载/双向删除/目录删除/冲突保留两份/手动冲突处理）
+   - `integration_test/sync_engine_test.dart`：同一流程在真机上跑通
+   - `integration_test/ui_flow_test.dart`：真机 UI 流程（登录 → 添加配对 → 同步 → 远程文件校验）
+
+## 实现备注
+
+- 目录自身不参与 mtime 比较（`planner.dart` 的 `dirLocalChanged`），否则「远程删了目录里的文件」会被我们自己的删除操作误判为本地修改
+- 远程列目录失败会让整次同步失败，而不是当作「远程为空」，避免误删全部本地文件
+- 删除安全阀阈值：单次删除数 > 20 且 > 基线 50% 时中止
+- 冲突副本命名：`name (conflict YYYY-MM-DD HHMM from 设备名).ext`，本地与远程各留一份
+- 冲突页的三个选项在「一侧已删除」时语义为：保留本地=删远程；保留远程=删本地

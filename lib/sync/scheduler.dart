@@ -8,6 +8,7 @@ import '../store/auth_store.dart';
 import '../store/db.dart';
 import '../store/settings_store.dart';
 import 'engine.dart';
+import '../util/network.dart';
 import 'notifications.dart';
 
 const String kSyncTask = 'ncsync-sync';
@@ -51,6 +52,7 @@ class Scheduler {
     final settings = await SettingsStore(db).load();
     final pairs = (await db.listPairs()).where((p) => p.enabled).toList();
     if (pairs.isEmpty) return '没有启用的同步目录';
+    if (settings.wifiOnly && !await isOnWifi()) return '非 Wi-Fi 网络';
 
     final client = NcClient(
       server: account.server,

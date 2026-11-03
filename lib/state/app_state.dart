@@ -14,6 +14,7 @@ import '../store/settings_store.dart';
 import '../sync/engine.dart';
 import '../sync/notifications.dart';
 import '../sync/scheduler.dart';
+import '../util/network.dart';
 
 class AppState extends ChangeNotifier {
   AppState({
@@ -199,6 +200,11 @@ class AppState extends ChangeNotifier {
     if (syncing) return null;
     if (!loggedIn) {
       lastError = '请先登录';
+      notifyListeners();
+      return null;
+    }
+    if (settings.wifiOnly && !await isOnWifi()) {
+      lastError = '已设置为仅在 Wi-Fi 下同步，当前网络不是 Wi-Fi';
       notifyListeners();
       return null;
     }
