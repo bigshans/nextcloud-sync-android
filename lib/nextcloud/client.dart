@@ -3,7 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
-import 'package:http/io_client.dart';
+
+import 'http_clients.dart';
 import 'package:xml/xml.dart';
 
 import '../models/models.dart';
@@ -32,25 +33,22 @@ class NcClient {
     required this.appPassword,
     http.Client? httpClient,
   })  : server = server.replaceAll(RegExp(r'/+$'), ''),
-        _http = httpClient ?? _defaultClient();
+        _http = httpClient ?? (HttpClients.cronet() ?? HttpClients.io()),
+        _ownsClient = httpClient != null;
 
   static final RegExp _trailingSlash = RegExp(r'/+$');
 
-  /// A connection pool wide enough for the transfer pool. Dart's HttpClient
-  /// keeps HTTP/1.1 connections alive, so raising the limit is what actually
-  /// enables parallel requests.
-  static http.Client _defaultClient() {
-    final inner = HttpClient()
-      ..maxConnectionsPerHost = 16
-      ..connectionTimeout = const Duration(seconds: 20)
-      ..idleTimeout = const Duration(seconds: 60);
-    return IOClient(inner);
-  }
+  /// Whether this instance owns the client and must close it.
+  final bool _ownsClient;
+
+  /// True while requests go through Cronet (HTTP/2).
+  bool get usingHttp2 =>
+      _http != HttpClients.io() && HttpClients.cronetAvailable;
 
   final String server;
   final String username;
   final String appPassword;
-  final http.Client _http;
+  http.Client _http;
 
   String get _basicAuth =>
       'Basic ${base64Encode(utf8.encode('$username:$appPassword'))}';
@@ -74,7 +72,9 @@ class NcClient {
         ...?extra,
       };
 
-  void close() => _http.close();
+  void close() {
+    if (_ownsClient) _http.close();
+  }
 
   // ------------------------------------------------------------------ helpers
 
@@ -93,6 +93,7 @@ class NcClient {
   }) async {
     final maxAttempts = attempts;
     Object? lastError;
+    var switchedToIo = false;
     for (var i = 0; i < maxAttempts; i++) {
       try {
         final resp = await _http.send(build()).timeout(timeout);
@@ -103,6 +104,16 @@ class NcClient {
         }
         return resp;
       } catch (e) {
+        // A broken Cronet build must not take the whole app down: switch to
+        // dart:io once and retry immediately.
+        if (!switchedToIo &&
+            usingHttp2 &&
+            (e is http.ClientException || e is Error)) {
+          switchedToIo = true;
+          _http = HttpClients.io();
+          HttpClients.markCronetBroken();
+          continue;
+        }
         // Mid-handshake resets are common on flaky mobile networks and
         // middleboxes; give them a few more chances than other errors.
         final extra = (e is HandshakeException) ? 2 : 0;
@@ -356,8 +367,9 @@ class NcClient {
         }))
         ..contentLength = length;
       try {
+        // Cronet buffers request bodies in memory, so huge files use dart:io.
         final responseFuture =
-            _http.send(req).timeout(const Duration(hours: 6));
+            HttpClients.io().send(req).timeout(const Duration(hours: 6));
         var sent = 0;
         await req.sink.addStream(file.openRead().map((chunk) {
           sent += chunk.length;

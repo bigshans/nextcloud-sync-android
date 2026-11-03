@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 
+import '../nextcloud/http_clients.dart';
 import '../state/app_state.dart';
 import '../util/format.dart';
 import '../sync/notifications.dart';
@@ -61,11 +62,13 @@ class _SettingsPageState extends State<SettingsPage> {
           _section('账号', theme),
           ListTile(
             leading: const Icon(Icons.cloud_outlined),
+            isThreeLine: true,
             title: Text(state.account?.server ?? ''),
             subtitle: Text(state.account == null
                 ? '未登录'
                 : '${state.account!.username}'
-                    '${_version.isEmpty ? '' : ' · Nextcloud $_version'}'),
+                    '${_version.isEmpty ? '' : ' · Nextcloud $_version'}'
+                    '\n传输：${HttpClients.cronetAvailable ? 'HTTP/2 (Cronet)' : 'HTTP/1.1'}'),
           ),
           ListTile(
             leading: const Icon(Icons.logout),

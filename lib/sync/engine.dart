@@ -83,6 +83,8 @@ class SyncEngine {
     try {
       progress('准备');
       _createdRemoteDirs.clear();
+      await db.log(pair.id, 'debug',
+          '传输协议: ${client.usingHttp2 ? 'HTTP/2 (Cronet)' : 'HTTP/1.1 (dart:io)'}');
       final root = pair.localPath;
       if (!await Directory(root).exists()) {
         await Directory(root).create(recursive: true);

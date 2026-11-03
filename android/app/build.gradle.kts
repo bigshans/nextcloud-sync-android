@@ -8,7 +8,7 @@ plugins {
 android {
     namespace = "dev.aerian.nextcloud_sync"
     compileSdk = 36
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
