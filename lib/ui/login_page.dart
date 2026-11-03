@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../nextcloud/diagnose.dart';
 import '../nextcloud/login_flow.dart';
 import '../state/app_state.dart';
 
@@ -106,6 +107,105 @@ class _LoginPageState extends State<LoginPage> {
         });
       }
     }
+  }
+
+  Future<void> _diagnose() async {
+    final server = _server.text.trim();
+    if (server.isEmpty) {
+      _snack('请先填写服务器地址');
+      return;
+    }
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const AlertDialog(
+        title: Text('网络诊断'),
+        content: Row(children: [
+          SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2)),
+          SizedBox(width: 16),
+          Text('正在测试连接…'),
+        ]),
+      ),
+    );
+    DiagResult? result;
+    String? failure;
+    try {
+      result = await diagnoseServer(server);
+    } catch (e) {
+      failure = '$e';
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    if (!mounted) return;
+    final theme = Theme.of(context);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(result?.ok == true ? '连接正常' : '连接失败'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (failure != null)
+                Text(failure, style: TextStyle(color: theme.colorScheme.error)),
+              for (final step in result?.steps ?? <DiagStep>[])
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        step.ok ? Icons.check_circle : Icons.cancel,
+                        size: 18,
+                        color: step.ok
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.error,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('${step.name}（${step.ms} ms）',
+                                style: theme.textTheme.bodyMedium),
+                            if (step.detail.isNotEmpty)
+                              Text(step.detail,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.outline)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (result?.status?['version'] != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                      'Nextcloud ${result!.status!['version']}',
+                      style: theme.textTheme.bodySmall),
+                ),
+              const SizedBox(height: 12),
+              Text(
+                '如果「TLS 握手」失败而浏览器能打开，通常是网络中间设备'
+                '（公司代理、运营商、Cloudflare 风控）中断了连接：'
+                '请切换网络（Wi-Fi/移动数据）、关闭代理或稍后重试。',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.outline),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+        ],
+      ),
+    );
   }
 
   void _snack(String msg) {
@@ -214,11 +314,22 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                       ],
                       const SizedBox(height: 8),
-                      TextButton(
-                        onPressed: _busy
-                            ? null
-                            : () => setState(() => _manual = true),
-                        child: const Text('改为手动输入应用密码'),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          TextButton(
+                            onPressed: _busy
+                                ? null
+                                : () => setState(() => _manual = true),
+                            child: const Text('改为手动输入应用密码'),
+                          ),
+                          const SizedBox(width: 8),
+                          TextButton.icon(
+                            onPressed: _busy ? null : _diagnose,
+                            icon: const Icon(Icons.network_check, size: 18),
+                            label: const Text('网络诊断'),
+                          ),
+                        ],
                       ),
                     ] else ...[
                       TextFormField(

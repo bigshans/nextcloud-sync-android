@@ -76,29 +76,36 @@ class NcClient {
 
   Future<http.StreamedResponse> _send(
     http.BaseRequest Function() build, {
-    int attempts = 3,
+    int attempts = 4,
     Duration timeout = const Duration(seconds: 45),
   }) async {
+    final maxAttempts = attempts;
     Object? lastError;
-    for (var i = 0; i < attempts; i++) {
+    for (var i = 0; i < maxAttempts; i++) {
       try {
         final resp = await _http.send(build()).timeout(timeout);
-        if (resp.statusCode >= 500 && i < attempts - 1) {
+        if (resp.statusCode >= 500 && i < maxAttempts - 1) {
           await resp.stream.drain<void>();
-          await Future<void>.delayed(Duration(milliseconds: 400 * (i + 1)));
+          await Future<void>.delayed(_backoff(i));
           continue;
         }
         return resp;
       } catch (e) {
-        if (!_retryable(e) || i == attempts - 1) {
+        // Mid-handshake resets are common on flaky mobile networks and
+        // middleboxes; give them a few more chances than other errors.
+        final extra = (e is HandshakeException) ? 2 : 0;
+        if (!_retryable(e) || i >= maxAttempts - 1 + extra) {
           throw NcException('网络请求失败: $e');
         }
         lastError = e;
       }
-      await Future<void>.delayed(Duration(milliseconds: 500 * (i + 1)));
+      await Future<void>.delayed(_backoff(i));
     }
     throw NcException('网络请求失败: $lastError');
   }
+
+  static Duration _backoff(int attempt) =>
+      Duration(milliseconds: 400 * (1 << attempt));
 
   Future<String> _readBody(http.StreamedResponse resp) async =>
       utf8.decode(await resp.stream.toBytes(), allowMalformed: true);
