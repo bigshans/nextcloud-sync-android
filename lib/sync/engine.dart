@@ -255,10 +255,23 @@ class SyncEngine {
             report.deleted++;
             break;
           case ActionKind.refresh:
-            rows.add(_row(action.path,
-                isDir: action.isDir,
-                l: localScan.entries[pathKey(action.path)],
-                r: remote[pathKey(action.path)]));
+            // Rewriting an unchanged baseline row is pure overhead: with very
+            // large trees this used to cost tens of thousands of DB upserts on
+            // every sync. Only write when something actually differs.
+            final key = pathKey(action.path);
+            final b = baseline[key];
+            final l = localScan.entries[key];
+            final r = remote[key];
+            final unchanged = b != null &&
+                b.isDir == action.isDir &&
+                b.etag == r?.etag &&
+                b.localMtimeMs == l?.mtimeMs &&
+                (action.isDir ||
+                    (b.localSize == l?.size && b.remoteSize == r?.size));
+            if (!unchanged) {
+              rows.add(_row(action.path,
+                  isDir: action.isDir, l: l, r: r));
+            }
             break;
           case ActionKind.renameRemote:
             await _renameRemote(pair, action, localScan.entries, remote, rows,

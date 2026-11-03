@@ -156,4 +156,7 @@ RECEIVE_BOOT_COMPLETED（重排周期任务）
 - 传输 4 路并发（`_TaskPool`），结构操作（建目录/删除/改名）作为顺序屏障
 - 快速扫描：`file_state` 同时充当远程缓存，目录 etag 未变则复用整棵子树；可用设置关闭做全量扫描
 - 远程变更判断先比 size 再比 etag：Nextcloud 的 etag 由 mtime 派生（秒级），同一秒内两次写入可能同 etag
+- 远程扫描短路：配对根的 Depth-0 etag 与上次相同时，直接用基线作为远程快照（1 个请求）
+- 本地扫描：顶层条目按 8 个一组分片，`Isolate.run` 并行 + 同步 syscall（`listSync`/`statSync`）
+- 无变化条目不写库：`refresh` 动作在基线完全一致时跳过 upsert
 - 冲突页的三个选项在「一侧已删除」时语义为：保留本地=删远程；保留远程=删本地
