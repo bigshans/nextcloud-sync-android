@@ -126,9 +126,11 @@ class SyncEngine {
         return report.finish();
       }
       progress('扫描本地');
+      final localScanWatch = Stopwatch()..start();
       final localScan = await scanLocal(root, onCount: (c) {
         progress('扫描本地', done: c);
       });
+      localScanWatch.stop();
       report.errors += localScan.errors.length;
       for (final e in localScan.errors.take(5)) {
         await db.log(pair.id, 'warn', e);
@@ -363,7 +365,12 @@ class SyncEngine {
       } else {
         await db.setPairResult(pair.id!, null, report.summary);
       }
-      await db.log(pair.id, 'info', '同步完成：${report.summary}');
+      await db.log(
+          pair.id,
+          'info',
+          '同步完成：${report.summary}'
+              '（本地扫描 ${localScanWatch.elapsedMilliseconds}ms，'
+              '共 ${localScan.entries.length} 项）');
       return report.finish();
     } catch (e, st) {
       report.fatalError = '$e';
