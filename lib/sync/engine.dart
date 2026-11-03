@@ -5,6 +5,7 @@ import '../models/models.dart';
 import '../nextcloud/client.dart';
 import '../store/db.dart';
 import '../util/paths.dart';
+import 'conflict_name.dart';
 import 'planner.dart';
 import 'scanner.dart';
 
@@ -19,13 +20,26 @@ class SyncEngine {
     required this.db,
     required this.client,
     required this.deviceName,
-    this.concurrency = 3,
+    this.concurrency = 4,
+    this.conflictPolicy = ConflictPolicy.newest,
+    this.fastScan = true,
   });
 
   final AppDb db;
   final NcClient client;
   final String deviceName;
   final int concurrency;
+
+  /// Single rule applied to every ambiguous case.
+  final ConflictPolicy conflictPolicy;
+
+  /// Reuse cached remote listings for directories whose etag did not change.
+  final bool fastScan;
+
+  static bool _isTransfer(ActionKind k) =>
+      k == ActionKind.upload ||
+      k == ActionKind.download ||
+      k == ActionKind.keepBoth;
 
   /// Remote directories already ensured during the current pass.
   final Set<String> _createdRemoteDirs = {};
@@ -72,9 +86,11 @@ class SyncEngine {
         await client.mkdirs(pair.remotePath);
       }
 
-      // 2. Scan both sides.
+      // 2. Scan both sides. The last baseline doubles as a remote cache so
+      // unchanged directory subtrees can be skipped entirely.
+      final baseline = await db.loadBaselines(pair.id!);
       progress('扫描远程');
-      final remote = await _scanRemote(pair, progress, cancel);
+      final remote = await _scanRemote(pair, progress, cancel, baseline);
       if (cancel?.isPaused == true) {
         report.paused = true;
         return report.finish();
@@ -99,13 +115,17 @@ class SyncEngine {
       }
 
       // 3. Three-way merge.
-      final baseline = await db.loadBaselines(pair.id!);
-      final pending = await db.pendingConflictPaths(pair.id!);
+      // With an automatic policy, previously deferred conflicts are re-planned
+      // and settled in this pass instead of blocking forever.
+      final pending = conflictPolicy == ConflictPolicy.ask
+          ? await db.pendingConflictPaths(pair.id!)
+          : const <String>{};
       final plan = planSync(
         local: localScan.entries,
         remote: remote,
         baseline: baseline,
         pendingConflicts: pending,
+        policy: conflictPolicy,
       );
 
       // 4. Safety valve against accidental mass deletion.
@@ -125,12 +145,14 @@ class SyncEngine {
         return report.finish();
       }
 
-      // 5. Execute.
+      // 5. Execute. File transfers run in parallel; structural changes
+      // (mkdir/delete/rename) act as barriers so ordering stays correct.
       var done = 0;
       final total = plan.actions.length;
       final rows = <Map<String, Object?>>[];
       final dropKeys = <String>{...plan.dropKeys};
       final dropPrefixes = <String>{...plan.dropPrefixes};
+      var fatal = false;
 
       Future<void> flush() async {
         if (rows.isEmpty && dropKeys.isEmpty && dropPrefixes.isEmpty) return;
@@ -146,108 +168,148 @@ class SyncEngine {
         dropPrefixes.clear();
       }
 
-      for (final action in plan.actions) {
-        if (cancel?.isPaused == true) {
-          await flush();
-          report.paused = true;
-          report.processed = done;
-          report.total = total;
-          await db.log(pair.id, 'info', '同步已暂停（$done/$total）');
-          progress('已暂停', done: done, total: total);
-          return report.finish();
-        }
-        progress('同步',
-            done: done, total: total, current: '${_verb(action.kind)} /${action.path}');
-        try {
-          switch (action.kind) {
-            case ActionKind.upload:
-              await _doUpload(pair, action, baseline, rows, dropKeys);
-              report.uploaded++;
-              break;
-            case ActionKind.download:
-              await _doDownload(pair, action, remote, rows, dropKeys);
-              report.downloaded++;
-              break;
-            case ActionKind.makeRemoteDir:
-              await _ensureRemoteDir(pair, action.path);
-              final r = await client.stat(_remotePath(pair, action.path));
-              rows.add(_row(action.path,
-                  isDir: true,
-                  l: localScan.entries[pathKey(action.path)],
-                  r: r));
-              break;
-            case ActionKind.makeLocalDir:
-              final abs = localJoin(pair.localPath, action.path);
-              await Directory(abs).create(recursive: true);
-              rows.add(_row(action.path,
-                  isDir: true,
-                  r: remote[pathKey(action.path)]));
-              break;
-            case ActionKind.deleteLocal:
-              final abs = localJoin(pair.localPath, action.path);
-              if (action.isDir) {
-                final d = Directory(abs);
-                if (await d.exists()) await d.delete(recursive: true);
-                dropPrefixes.add(pathKey(action.path));
-              } else {
-                final f = File(abs);
-                if (await f.exists()) await f.delete();
-                dropKeys.add(pathKey(action.path));
-              }
-              report.deleted++;
-              break;
-            case ActionKind.deleteRemote:
-              await client.delete(_remotePath(pair, action.path));
-              if (action.isDir) {
-                dropPrefixes.add(pathKey(action.path));
-              } else {
-                dropKeys.add(pathKey(action.path));
-              }
-              report.deleted++;
-              break;
-            case ActionKind.refresh:
-              rows.add(_row(action.path,
-                  isDir: action.isDir,
-                  l: localScan.entries[pathKey(action.path)],
-                  r: remote[pathKey(action.path)]));
-              break;
-            case ActionKind.keepBoth:
-              await _keepBoth(pair, action, localScan.entries, remote, rows);
-              report.conflicts++;
-              break;
-            case ActionKind.needsDecision:
-              await db.addConflict(
-                pairId: pair.id!,
-                path: action.path,
-                kind: 'manual',
-                detail: action.reason,
-              );
-              await db.log(pair.id, 'warn',
-                  '需要人工处理: /${action.path} — ${action.reason ?? ''}');
-              report.conflicts++;
-              break;
-            case ActionKind.forget:
-              dropKeys.add(pathKey(action.path));
-              break;
-          }
-        } catch (e) {
-          report.errors++;
-          await db.log(pair.id, 'error',
-              '${_verb(action.kind)} /${action.path} 失败: $e');
-          if (e is NcException && e.isAuth) {
-            report.fatalError = '认证失败，请重新登录';
-            await flush();
-            return report.finish();
-          }
-        }
-        done++;
-        if (rows.length >= 100 ||
-            dropKeys.length + dropPrefixes.length >= 100) {
-          await flush();
+      Future<void> onError(SyncAction action, Object e) async {
+        report.errors++;
+        await db.log(pair.id, 'error',
+            '${_verb(action.kind)} /${action.path} 失败: $e');
+        if (e is NcException && e.isAuth) {
+          report.fatalError = '认证失败，请重新登录';
+          fatal = true;
         }
       }
 
+      Future<void> run(SyncAction action) async {
+        switch (action.kind) {
+          case ActionKind.upload:
+            await _doUpload(pair, action, baseline, rows, dropKeys);
+            report.uploaded++;
+            break;
+          case ActionKind.download:
+            await _doDownload(pair, action, remote, rows, dropKeys);
+            report.downloaded++;
+            break;
+          case ActionKind.makeRemoteDir:
+            await _ensureRemoteDir(pair, action.path);
+            final r = await client.stat(_remotePath(pair, action.path));
+            rows.add(_row(action.path,
+                isDir: true,
+                l: localScan.entries[pathKey(action.path)],
+                r: r));
+            break;
+          case ActionKind.makeLocalDir:
+            final abs = localJoin(pair.localPath, action.path);
+            await Directory(abs).create(recursive: true);
+            rows.add(_row(action.path,
+                isDir: true, r: remote[pathKey(action.path)]));
+            break;
+          case ActionKind.deleteLocal:
+            final abs = localJoin(pair.localPath, action.path);
+            if (action.isDir) {
+              final d = Directory(abs);
+              if (await d.exists()) await d.delete(recursive: true);
+              dropPrefixes.add(pathKey(action.path));
+            } else {
+              final f = File(abs);
+              if (await f.exists()) await f.delete();
+              dropKeys.add(pathKey(action.path));
+            }
+            report.deleted++;
+            break;
+          case ActionKind.deleteRemote:
+            await client.delete(_remotePath(pair, action.path));
+            if (action.isDir) {
+              dropPrefixes.add(pathKey(action.path));
+            } else {
+              dropKeys.add(pathKey(action.path));
+            }
+            report.deleted++;
+            break;
+          case ActionKind.refresh:
+            rows.add(_row(action.path,
+                isDir: action.isDir,
+                l: localScan.entries[pathKey(action.path)],
+                r: remote[pathKey(action.path)]));
+            break;
+          case ActionKind.renameRemote:
+            await _renameRemote(pair, action, localScan.entries, remote, rows,
+                dropKeys);
+            break;
+          case ActionKind.keepBoth:
+            await _keepBoth(pair, action, localScan.entries, remote, rows);
+            report.conflicts++;
+            break;
+          case ActionKind.needsDecision:
+            await db.addConflict(
+              pairId: pair.id!,
+              path: action.path,
+              kind: 'manual',
+              detail: action.reason,
+            );
+            await db.log(pair.id, 'warn',
+                '需要人工处理: /${action.path} — ${action.reason ?? ''}');
+            report.conflicts++;
+            break;
+          case ActionKind.forget:
+            dropKeys.add(pathKey(action.path));
+            break;
+        }
+      }
+
+      final pool = _TaskPool(concurrency);
+      for (final action in plan.actions) {
+        if (fatal || cancel?.isPaused == true) break;
+        if (_isTransfer(action.kind)) {
+          pool.submit(() async {
+            progress('同步',
+                done: done,
+                total: total,
+                current: '${_verb(action.kind)} /${action.path}');
+            try {
+              await run(action);
+            } catch (e) {
+              await onError(action, e);
+            }
+            done++;
+          });
+          // Keep the queue bounded so a pause request is honoured within one
+          // small wave instead of after thousands of queued transfers.
+          if (pool.queued >= concurrency) {
+            await pool.drain();
+          }
+        } else {
+          // Ordering barrier: let queued transfers finish first.
+          await pool.drain();
+          if (fatal || cancel?.isPaused == true) break;
+          progress('同步',
+              done: done,
+              total: total,
+              current: '${_verb(action.kind)} /${action.path}');
+          try {
+            await run(action);
+          } catch (e) {
+            await onError(action, e);
+          }
+          done++;
+          if (rows.length >= 400 ||
+              dropKeys.length + dropPrefixes.length >= 400) {
+            await flush();
+          }
+        }
+      }
+      await pool.drain();
       await flush();
+      if (cancel?.isPaused == true) {
+        report.paused = true;
+        report.processed = done;
+        report.total = total;
+        await db.log(pair.id, 'info', '同步已暂停（$done/$total）');
+        progress('已暂停', done: done, total: total);
+        return report.finish();
+      }
+      if (conflictPolicy != ConflictPolicy.ask && report.errors == 0) {
+        // Everything that needed a decision has been settled by the policy.
+        await db.resolveAllConflicts(pair.id!);
+      }
       report.processed = total;
       report.total = total;
       progress('完成', done: total, total: total);
@@ -277,6 +339,7 @@ class SyncEngine {
         ActionKind.deleteRemote => '删除远程',
         ActionKind.refresh => '检查',
         ActionKind.keepBoth => '冲突保留两份',
+        ActionKind.renameRemote => '统一大小写',
         ActionKind.needsDecision => '待处理',
         ActionKind.forget => '清理',
       };
@@ -388,11 +451,13 @@ class SyncEngine {
     void Function(String phase, {int done, int total, String? current})
         progress,
     SyncCancelToken? cancel,
+    Map<String, Baseline> cache,
   ) async {
     final out = <String, RemoteEntry>{};
     final rootPrefix = normalizeRel(pair.remotePath);
     final queue = <String>[rootPrefix];
     var listed = 0;
+    var reusedDirs = 0;
 
     String toRelative(String full) {
       if (rootPrefix.isEmpty) return full;
@@ -401,6 +466,29 @@ class SyncEngine {
         return full.substring(rootPrefix.length + 1);
       }
       return full;
+    }
+
+    // Cache grouped by parent for cheap expansion of skipped subtrees.
+    final cachedChildren = <String, List<Baseline>>{};
+    for (final b in cache.values) {
+      cachedChildren.putIfAbsent(parentOf(b.path), () => []).add(b);
+    }
+
+    void addCachedSubtree(String dirRel) {
+      final stack = <String>[normalizeRel(dirRel)];
+      while (stack.isNotEmpty) {
+        final dir = stack.removeLast();
+        for (final b in cachedChildren[dir] ?? const <Baseline>[]) {
+          out[pathKey(b.path)] = RemoteEntry(
+            path: b.path,
+            isDir: b.isDir,
+            etag: b.etag,
+            mtimeMs: b.remoteMtimeMs,
+            size: b.remoteSize,
+          );
+          if (b.isDir) stack.add(b.path);
+        }
+      }
     }
 
     while (queue.isNotEmpty) {
@@ -445,14 +533,33 @@ class SyncEngine {
             mtimeMs: e.mtimeMs,
             size: e.size,
           );
-          if (e.isDir) queue.add(e.path);
+          if (e.isDir) {
+            // Nextcloud bumps a folder's etag when anything below it changes,
+            // so an unchanged etag means the whole subtree is unchanged.
+            final cached = cache[key];
+            final canReuse = fastScan &&
+                cached != null &&
+                cached.isDir &&
+                cached.etag != null &&
+                e.etag != null &&
+                cached.etag == e.etag;
+            if (canReuse) {
+              addCachedSubtree(rel);
+              reusedDirs++;
+            } else {
+              queue.add(e.path);
+            }
+          }
         }
         listed++;
       }
       progress('扫描远程', done: out.length);
     }
     await db.log(
-        pair.id, 'debug', '远程扫描完成：$listed 个目录，${out.length} 项');
+        pair.id,
+        'debug',
+        '远程扫描完成：请求 $listed 个目录，复用 $reusedDirs 个未变更目录，'
+            '共 ${out.length} 项');
     return out;
   }
 
@@ -518,6 +625,35 @@ class SyncEngine {
     dropKeys.remove(pathKey(path));
   }
 
+  /// Renames the remote entry to the local spelling (case-only differences).
+  Future<void> _renameRemote(
+    Pair pair,
+    SyncAction action,
+    Map<String, LocalEntry> local,
+    Map<String, RemoteEntry> remote,
+    List<Map<String, Object?>> rows,
+    Set<String> dropKeys,
+  ) async {
+    final from = normalizeRel(action.path);
+    final to = normalizeRel(action.newPath ?? action.path);
+    await client.move(_remotePath(pair, from), _remotePath(pair, to));
+    dropKeys.add(pathKey(from));
+    final r = await client.stat(_remotePath(pair, to));
+    final l = local[pathKey(to)];
+    if (r != null) {
+      rows.add(_row(to,
+          isDir: r.isDir,
+          l: l,
+          r: RemoteEntry(
+            path: to,
+            isDir: r.isDir,
+            etag: r.etag,
+            mtimeMs: r.mtimeMs,
+            size: r.size,
+          )));
+    }
+  }
+
   Future<void> _keepBoth(
     Pair pair,
     SyncAction action,
@@ -532,13 +668,12 @@ class SyncEngine {
       throw NcException('冲突路径已变化: /$path');
     }
     final now = DateTime.now();
-    final stamp = '${now.year}-${_two(now.month)}-${_two(now.day)} '
-        '${_two(now.hour)}${_two(now.minute)}';
-    final suffix = ' (conflict $stamp from $deviceName)';
-    final conflictName = '${_stem(path)}$suffix${_ext(path)}';
-    var conflictPath =
-        parentOf(path).isEmpty ? conflictName : '${parentOf(path)}/$conflictName';
-    conflictPath = await _uniqueRemotePath(pair, conflictPath, suffix, path);
+    // Same naming convention as the official Nextcloud clients:
+    //   name (conflicted copy <device> yyyy-MM-dd hhmmss).ext
+    var conflictPath = parentOf(path).isEmpty
+        ? conflictFileName(path, deviceName, now)
+        : conflictFileName(path, deviceName, now);
+    conflictPath = await _uniqueRemotePath(pair, conflictPath, path);
 
     // 1. Move the remote version aside.
     await client.move(_remotePath(pair, path), _remotePath(pair, conflictPath),
@@ -584,31 +719,15 @@ class SyncEngine {
   }
 
   Future<String> _uniqueRemotePath(
-      Pair pair, String candidate, String suffix, String original) async {
+      Pair pair, String candidate, String original) async {
     var attempt = candidate;
     var i = 1;
     while (await client.stat(_remotePath(pair, attempt)) != null) {
       i++;
-      final name = '${_stem(original)}$suffix-$i${_ext(original)}';
-      attempt = parentOf(original).isEmpty
-          ? name
-          : '${parentOf(original)}/$name';
+      attempt = conflictFileName(original, deviceName, DateTime.now(),
+          sequence: i);
     }
     return attempt;
-  }
-
-  static String _two(int v) => v.toString().padLeft(2, '0');
-
-  static String _stem(String path) {
-    final name = baseName(path);
-    final dot = name.lastIndexOf('.');
-    return dot <= 0 ? name : name.substring(0, dot);
-  }
-
-  static String _ext(String path) {
-    final name = baseName(path);
-    final dot = name.lastIndexOf('.');
-    return dot <= 0 ? '' : name.substring(dot);
   }
 
   Future<void> _ensureRemoteDir(Pair pair, String relPath) async {
@@ -669,4 +788,47 @@ class _ReportBuilder {
         total: total,
         messages: List.unmodifiable(messages),
       );
+}
+
+/// Runs up to [size] async tasks concurrently and supports a drain barrier.
+class _TaskPool {
+  _TaskPool(this.size);
+  final int size;
+  final List<Future<void> Function()> _queue = [];
+  int _running = 0;
+  Completer<void>? _idle;
+
+  void submit(Future<void> Function() task) {
+    _queue.add(task);
+    _pump();
+  }
+
+  void _pump() {
+    while (_running < size && _queue.isNotEmpty) {
+      final task = _queue.removeAt(0);
+      _running++;
+      Future<void>(() async {
+        try {
+          await task();
+        } catch (_) {
+          // Errors are handled inside the task itself.
+        }
+      }).whenComplete(() {
+        _running--;
+        _pump();
+        if (_running == 0 && _queue.isEmpty) {
+          _idle?.complete();
+          _idle = null;
+        }
+      });
+    }
+  }
+
+  int get queued => _queue.length;
+
+  Future<void> drain() {
+    if (_running == 0 && _queue.isEmpty) return Future<void>.value();
+    _idle ??= Completer<void>();
+    return _idle!.future;
+  }
 }

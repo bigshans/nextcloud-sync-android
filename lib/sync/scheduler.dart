@@ -63,6 +63,8 @@ class Scheduler {
       db: db,
       client: client,
       deviceName: settings.deviceName,
+      conflictPolicy: settings.conflictPolicy,
+      fastScan: settings.fastScan,
     );
     var changed = 0;
     var conflicts = 0;

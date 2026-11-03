@@ -290,6 +290,12 @@ CREATE TABLE logs(
     });
   }
 
+  Future<void> resolveAllConflicts(int pairId) async {
+    final d = await db;
+    await d.update('conflicts', {'resolved': 1},
+        where: 'pair_id = ? AND resolved = 0', whereArgs: [pairId]);
+  }
+
   Future<void> resolveConflict(int id) async {
     final d = await db;
     await d.update('conflicts', {'resolved': 1},

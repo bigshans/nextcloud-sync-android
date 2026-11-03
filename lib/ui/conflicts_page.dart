@@ -60,11 +60,44 @@ class _ConflictsPageState extends State<ConflictsPage> {
         _ => kind,
       };
 
+  Future<void> _applyPolicy() async {
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    if (state.settings.conflictPolicy == ConflictPolicy.ask) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('当前策略是「逐条询问」，请先在设置里选择自动策略')));
+      return;
+    }
+    final ids = _conflicts.map((c) => c.pairId).toSet();
+    setState(() => _loading = true);
+    for (final id in ids) {
+      Pair? pair;
+      for (final p in state.pairs) {
+        if (p.id == id) pair = p;
+      }
+      if (pair != null) await state.syncPair(pair);
+    }
+    await _load();
+    if (!mounted) return;
+    messenger.showSnackBar(const SnackBar(
+        content: Text('已按当前策略处理，剩余的仍需要手动选择')));
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('冲突')),
+      appBar: AppBar(
+        title: const Text('冲突'),
+        actions: [
+          if (_conflicts.isNotEmpty)
+            IconButton(
+              tooltip: '按当前策略全部处理',
+              onPressed: _loading ? null : _applyPolicy,
+              icon: const Icon(Icons.auto_fix_high),
+            ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _conflicts.isEmpty

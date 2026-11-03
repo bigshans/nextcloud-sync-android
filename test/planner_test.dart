@@ -44,6 +44,7 @@ SyncPlan plan({
   Map<String, Baseline> baseline = const {},
   Set<String> pending = const {},
   bool syncDeletions = true,
+  ConflictPolicy policy = ConflictPolicy.ask,
 }) =>
     planSync(
       local: {for (final e in local.values) pathKey(e.path): e},
@@ -51,6 +52,7 @@ SyncPlan plan({
       baseline: {for (final e in baseline.values) pathKey(e.path): e},
       pendingConflicts: pending,
       syncDeletions: syncDeletions,
+      policy: policy,
     );
 
 List<ActionKind> kinds(SyncPlan p) => p.actions.map((a) => a.kind).toList();
@@ -75,12 +77,12 @@ void main() {
       expect(kinds(p), [ActionKind.refresh]);
     });
 
-    test('new different file on both sides keeps both', () {
+    test('new different file on both sides asks by default', () {
       final p = plan(
         local: {'a.txt': lf('a.txt', size: 5)},
         remote: {'a.txt': rf('a.txt', size: 9)},
       );
-      expect(kinds(p), [ActionKind.keepBoth]);
+      expect(kinds(p), [ActionKind.needsDecision]);
     });
 
     test('local edit uploads', () {
@@ -101,13 +103,122 @@ void main() {
       expect(kinds(p), [ActionKind.download]);
     });
 
-    test('both edited keeps both', () {
+    test('both edited asks by default', () {
       final p = plan(
         local: {'a.txt': lf('a.txt', size: 30, mtime: 3000)},
         remote: {'a.txt': rf('a.txt', etag: 'e2', size: 40)},
         baseline: {'a.txt': bf('a.txt')},
       );
-      expect(kinds(p), [ActionKind.keepBoth]);
+      expect(kinds(p), [ActionKind.needsDecision]);
+    });
+
+    group('conflict policies', () {
+      test('newest uploads the newer local file', () {
+        final p = plan(
+          local: {'a.txt': lf('a.txt', size: 30, mtime: 9000)},
+          remote: {'a.txt': rf('a.txt', etag: 'e2', size: 40, mtime: 5000)},
+          baseline: {'a.txt': bf('a.txt')},
+          policy: ConflictPolicy.newest,
+        );
+        expect(kinds(p), [ActionKind.upload]);
+      });
+
+      test('newest downloads the newer remote file', () {
+        final p = plan(
+          local: {'a.txt': lf('a.txt', size: 30, mtime: 5000)},
+          remote: {'a.txt': rf('a.txt', etag: 'e2', size: 40, mtime: 9000)},
+          baseline: {'a.txt': bf('a.txt')},
+          policy: ConflictPolicy.newest,
+        );
+        expect(kinds(p), [ActionKind.download]);
+      });
+
+      test('newest falls back to both copies on a tie', () {
+        final p = plan(
+          local: {'a.txt': lf('a.txt', size: 30, mtime: 5000)},
+          remote: {'a.txt': rf('a.txt', etag: 'e2', size: 40, mtime: 5000)},
+          baseline: {'a.txt': bf('a.txt')},
+          policy: ConflictPolicy.newest,
+        );
+        expect(kinds(p), [ActionKind.keepBoth]);
+      });
+
+      test('preferLocal uploads, preferRemote downloads', () {
+        final local = {'a.txt': lf('a.txt', size: 30, mtime: 9000)};
+        final remote = {'a.txt': rf('a.txt', etag: 'e2', size: 40, mtime: 9500)};
+        expect(
+            kinds(plan(
+                local: local,
+                remote: remote,
+                baseline: {'a.txt': bf('a.txt')},
+                policy: ConflictPolicy.preferLocal)),
+            [ActionKind.upload]);
+        expect(
+            kinds(plan(
+                local: local,
+                remote: remote,
+                baseline: {'a.txt': bf('a.txt')},
+                policy: ConflictPolicy.preferRemote)),
+            [ActionKind.download]);
+        expect(
+            kinds(plan(
+                local: local,
+                remote: remote,
+                baseline: {'a.txt': bf('a.txt')},
+                policy: ConflictPolicy.keepBoth)),
+            [ActionKind.keepBoth]);
+      });
+
+      test('deletion conflicts follow the policy', () {
+        // Remote deleted, local edited.
+        expect(
+            kinds(plan(
+                local: {'a.txt': lf('a.txt', size: 7, mtime: 9999)},
+                baseline: {'a.txt': bf('a.txt')},
+                policy: ConflictPolicy.preferRemote)),
+            [ActionKind.deleteLocal]);
+        expect(
+            kinds(plan(
+                local: {'a.txt': lf('a.txt', size: 7, mtime: 9999)},
+                baseline: {'a.txt': bf('a.txt')},
+                policy: ConflictPolicy.newest)),
+            [ActionKind.upload]);
+
+        // Local deleted, remote edited.
+        expect(
+            kinds(plan(
+                remote: {'a.txt': rf('a.txt', etag: 'e2', size: 7)},
+                baseline: {'a.txt': bf('a.txt')},
+                policy: ConflictPolicy.preferLocal)),
+            [ActionKind.deleteRemote]);
+        expect(
+            kinds(plan(
+                remote: {'a.txt': rf('a.txt', etag: 'e2', size: 7)},
+                baseline: {'a.txt': bf('a.txt')},
+                policy: ConflictPolicy.newest)),
+            [ActionKind.download]);
+      });
+
+      test('case-only difference converges on one spelling', () {
+        final p = plan(
+          local: {'readme.md': lf('readme.md', size: 10, mtime: 1000)},
+          remote: {'README.md': rf('README.md', size: 10, mtime: 1000)},
+          policy: ConflictPolicy.newest,
+        );
+        expect(kinds(p),
+            [ActionKind.renameRemote, ActionKind.refresh]);
+        expect(p.actions.first.newPath, 'readme.md');
+      });
+
+      test('type conflict follows preferLocal', () {
+        final p = plan(
+          local: {'x': lf('x', size: 4)},
+          remote: {'x': rd('x')},
+          policy: ConflictPolicy.preferLocal,
+        );
+        expect(kinds(p),
+            [ActionKind.deleteRemote, ActionKind.upload]);
+      });
     });
 
     test('unchanged does nothing', () {

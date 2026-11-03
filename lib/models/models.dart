@@ -124,6 +124,26 @@ class Baseline {
   });
 }
 
+/// How conflicting changes are settled. A single rule is applied consistently,
+/// and the result is applied in the same sync pass (no pending questions),
+/// except for [ConflictPolicy.ask] and cases that cannot be merged safely.
+enum ConflictPolicy {
+  /// Newest modification wins (falls back to keeping both on a tie).
+  newest,
+
+  /// The device version always wins.
+  preferLocal,
+
+  /// The server version always wins.
+  preferRemote,
+
+  /// Keep both copies with a conflict suffix.
+  keepBoth,
+
+  /// Ask the user per file (shows up in the conflicts list).
+  ask,
+}
+
 enum ActionKind {
   upload,
   download,
@@ -135,6 +155,9 @@ enum ActionKind {
   refresh,
   /// Both sides changed: keep both copies.
   keepBoth,
+  /// The same file on both sides differs only in the letter case; rename the
+  /// remote copy to the local spelling so both sides converge.
+  renameRemote,
   /// Cannot be decided automatically; needs a user decision.
   needsDecision,
   /// Both sides are gone; just drop the stored baseline.
@@ -147,8 +170,11 @@ class SyncAction {
   final bool isDir;
   final String? reason;
 
+  /// Target path for rename actions.
+  final String? newPath;
+
   const SyncAction(this.kind, this.path,
-      {this.isDir = false, this.reason});
+      {this.isDir = false, this.reason, this.newPath});
 
   @override
   String toString() => '$kind($path)${reason == null ? '' : ' [$reason]'}';
@@ -278,12 +304,16 @@ class AppSettings {
   final int intervalMinutes;
   final bool wifiOnly;
   final bool notify;
+  final ConflictPolicy conflictPolicy;
+  final bool fastScan;
 
   const AppSettings({
     this.deviceName = 'Android',
     this.intervalMinutes = 15,
     this.wifiOnly = false,
     this.notify = true,
+    this.conflictPolicy = ConflictPolicy.newest,
+    this.fastScan = true,
   });
 
   AppSettings copyWith({
@@ -291,11 +321,15 @@ class AppSettings {
     int? intervalMinutes,
     bool? wifiOnly,
     bool? notify,
+    ConflictPolicy? conflictPolicy,
+    bool? fastScan,
   }) =>
       AppSettings(
         deviceName: deviceName ?? this.deviceName,
         intervalMinutes: intervalMinutes ?? this.intervalMinutes,
         wifiOnly: wifiOnly ?? this.wifiOnly,
         notify: notify ?? this.notify,
+        conflictPolicy: conflictPolicy ?? this.conflictPolicy,
+        fastScan: fastScan ?? this.fastScan,
       );
 }

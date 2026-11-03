@@ -5,6 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/models.dart';
+
 import '../state/app_state.dart';
 import '../sync/notifications.dart';
 
@@ -129,6 +131,39 @@ class _SettingsPageState extends State<SettingsPage> {
                 await state.saveSettings(s.copyWith(intervalMinutes: v));
               },
             ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.merge_type),
+            title: const Text('冲突处理策略'),
+            subtitle: Text(_policyHint(s.conflictPolicy)),
+            trailing: DropdownButton<ConflictPolicy>(
+              value: s.conflictPolicy,
+              items: const [
+                DropdownMenuItem(
+                    value: ConflictPolicy.newest, child: Text('最新优先')),
+                DropdownMenuItem(
+                    value: ConflictPolicy.preferLocal, child: Text('保留本地')),
+                DropdownMenuItem(
+                    value: ConflictPolicy.preferRemote, child: Text('保留远程')),
+                DropdownMenuItem(
+                    value: ConflictPolicy.keepBoth, child: Text('保留两份')),
+                DropdownMenuItem(
+                    value: ConflictPolicy.ask, child: Text('逐条询问')),
+              ],
+              onChanged: (v) async {
+                if (v == null) return;
+                await state.saveSettings(s.copyWith(conflictPolicy: v));
+              },
+            ),
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.bolt),
+            title: const Text('快速扫描（跳过未变更的远程目录）'),
+            subtitle: const Text(
+                '利用 Nextcloud 目录 etag 跳过整棵未变化子树，大目录树可快数倍；'
+                '若发现远程改动没被同步，可关闭它做一次全量扫描'),
+            value: s.fastScan,
+            onChanged: (v) => state.saveSettings(s.copyWith(fastScan: v)),
           ),
           SwitchListTile(
             secondary: const Icon(Icons.wifi),
@@ -294,6 +329,15 @@ class _SettingsPageState extends State<SettingsPage> {
       messenger.showSnackBar(SnackBar(content: Text('导入失败：$e')));
     }
   }
+
+  String _policyHint(ConflictPolicy p) => switch (p) {
+        ConflictPolicy.newest =>
+          '两边都改时保留修改时间较新的一份，同一次同步内直接完成',
+        ConflictPolicy.preferLocal => '两边都改时总是用本机版本覆盖远程',
+        ConflictPolicy.preferRemote => '两边都改时总是用远程版本覆盖本机',
+        ConflictPolicy.keepBoth => '两边都改时自动改名保留两份（不询问）',
+        ConflictPolicy.ask => '无法自动判断时进入「冲突」列表等待选择',
+      };
 
   Widget _section(String title, ThemeData theme) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),

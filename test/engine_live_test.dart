@@ -41,7 +41,12 @@ void main() {
         username: creds['loginName'] as String,
         appPassword: creds['appPassword'] as String,
       );
-      engine = SyncEngine(db: db, client: client, deviceName: 'host-test');
+      engine = SyncEngine(
+        db: db,
+        client: client,
+        deviceName: 'host-test',
+        conflictPolicy: ConflictPolicy.keepBoth,
+      );
       local = Directory('${work.path}/local')..createSync(recursive: true);
       remoteRoot = 'ncsync-host-${DateTime.now().millisecondsSinceEpoch}';
       pair = Pair(
@@ -128,6 +133,12 @@ void main() {
             ..writeAsStringSync('remote conflict version'),
           '$remoteRoot/a.txt');
       r = await engine.syncPair(pair);
+      if (r.conflicts < 1) {
+        for (final l in (await db.recentLogs(limit: 15)).reversed) {
+          // ignore: avoid_print
+          print('LOG5 ${l.level} ${l.message}');
+        }
+      }
       expect(r.conflicts, greaterThanOrEqualTo(1), reason: r.summary);
       expect(File('${local.path}/a.txt').readAsStringSync(),
           'local conflict version');
@@ -179,14 +190,35 @@ void main() {
           File('${local.parent.path}/m2.txt')
             ..writeAsStringSync('remote changed'),
           '$remoteRoot/manual.txt');
+      // keepBoth cannot keep two copies when one side was deleted, so it
+      // restores the surviving version instead of asking.
       r = await engine.syncPair(pair);
-      expect(r.conflicts, 1, reason: r.summary);
-      final pending = await db.conflicts(pairId, resolved: false);
-      expect(pending, isNotEmpty);
-      await engine.resolveConflict(pending.first, ConflictChoice.keepRemote);
+      expect(r.downloaded, 1, reason: r.summary);
       expect(File('${local.path}/manual.txt').readAsStringSync(),
           'remote changed');
       expect(await db.conflicts(pairId, resolved: false), isEmpty);
+
+      // 10. The "ask" policy defers the same case and the user resolves it.
+      final askEngine = SyncEngine(
+        db: db,
+        client: client,
+        deviceName: 'host-test',
+        conflictPolicy: ConflictPolicy.ask,
+      );
+      File('${local.path}/ask.txt').writeAsStringSync('v1');
+      r = await askEngine.syncPair(pair);
+      expect(r.uploaded, 1, reason: r.summary);
+      File('${local.path}/ask.txt').deleteSync();
+      await client.upload(
+          File('${local.parent.path}/ask2.txt')
+            ..writeAsStringSync('remote v2'),
+          '$remoteRoot/ask.txt');
+      r = await askEngine.syncPair(pair);
+      expect(r.conflicts, 1, reason: r.summary);
+      final deferred = await db.conflicts(pairId, resolved: false);
+      final askConflict = deferred.firstWhere((c) => c.path == 'ask.txt');
+      await askEngine.resolveConflict(askConflict, ConflictChoice.keepRemote);
+      expect(File('${local.path}/ask.txt').readAsStringSync(), 'remote v2');
     }, timeout: const Timeout(Duration(minutes: 10)));
   }, skip: creds == null ? 'no credentials' : false);
 }

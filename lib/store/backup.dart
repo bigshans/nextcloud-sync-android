@@ -40,6 +40,8 @@ class BackupBundle {
           'intervalMinutes': settings.intervalMinutes,
           'wifiOnly': settings.wifiOnly,
           'notify': settings.notify,
+          'conflictPolicy': settings.conflictPolicy.name,
+          'fastScan': settings.fastScan,
         },
         'pairs': [
           for (final p in pairs)
@@ -82,12 +84,18 @@ class BackupBundle {
     final s = decoded['settings'];
     var settings = const AppSettings();
     if (s is Map<String, dynamic>) {
+      final policyName = s['conflictPolicy'] as String?;
       settings = AppSettings(
         deviceName: (s['deviceName'] as String?) ?? 'Android',
         intervalMinutes:
             ((s['intervalMinutes'] as num?)?.toInt() ?? 15).clamp(15, 1440),
         wifiOnly: (s['wifiOnly'] as bool?) ?? false,
         notify: (s['notify'] as bool?) ?? true,
+        conflictPolicy: ConflictPolicy.values.firstWhere(
+          (p) => p.name == policyName,
+          orElse: () => ConflictPolicy.newest,
+        ),
+        fastScan: (s['fastScan'] as bool?) ?? true,
       );
     }
     final pairs = <Pair>[];

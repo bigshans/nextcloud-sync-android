@@ -254,6 +254,11 @@ class NcClient {
   static XmlElement? _first(Iterable<XmlElement> elements) =>
       elements.isEmpty ? null : elements.first;
 
+  /// Nextcloud reports the new ETag as `oc-etag` on PUT/GET responses; only
+  /// some proxies also expose a plain `ETag`.
+  static String? _etagOf(http.BaseResponse resp) =>
+      _stripQuotes(resp.headers['oc-etag'] ?? resp.headers['etag']);
+
   static String? _stripQuotes(String? v) {
     if (v == null) return null;
     if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
@@ -312,7 +317,7 @@ class NcClient {
     if (resp.statusCode == 200 ||
         resp.statusCode == 201 ||
         resp.statusCode == 204) {
-      final etag = _stripQuotes(resp.headers['etag']);
+      final etag = _etagOf(resp);
       if (etag == null) return stat(relPath);
       return RemoteEntry(
           path: normalizeRel(relPath),
@@ -353,7 +358,7 @@ class NcClient {
         if (resp.statusCode == 200 ||
             resp.statusCode == 201 ||
             resp.statusCode == 204) {
-          final etag = _stripQuotes(resp.headers['etag']);
+          final etag = _etagOf(resp);
           if (etag == null) return stat(relPath);
           return RemoteEntry(
               path: normalizeRel(relPath),
@@ -419,7 +424,7 @@ class NcClient {
       } catch (_) {}
       rethrow;
     }
-    return _stripQuotes(resp.headers['etag']);
+    return _etagOf(resp);
   }
 
   Future<void> delete(String relPath) async {

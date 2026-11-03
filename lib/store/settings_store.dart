@@ -13,11 +13,19 @@ class SettingsStore {
         15;
     final wifiOnly = (await _db.getSetting('wifi_only') ?? '0') == '1';
     final notify = (await _db.getSetting('notify') ?? '1') == '1';
+    final fastScan = (await _db.getSetting('fast_scan') ?? '1') == '1';
+    final policyName = await _db.getSetting('conflict_policy');
+    final policy = ConflictPolicy.values.firstWhere(
+      (p) => p.name == policyName,
+      orElse: () => ConflictPolicy.newest,
+    );
     return AppSettings(
       deviceName: deviceName,
       intervalMinutes: interval.clamp(15, 1440),
       wifiOnly: wifiOnly,
       notify: notify,
+      conflictPolicy: policy,
+      fastScan: fastScan,
     );
   }
 
@@ -26,5 +34,7 @@ class SettingsStore {
     await _db.setSetting('interval_minutes', s.intervalMinutes.toString());
     await _db.setSetting('wifi_only', s.wifiOnly ? '1' : '0');
     await _db.setSetting('notify', s.notify ? '1' : '0');
+    await _db.setSetting('conflict_policy', s.conflictPolicy.name);
+    await _db.setSetting('fast_scan', s.fastScan ? '1' : '0');
   }
 }

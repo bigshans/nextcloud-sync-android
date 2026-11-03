@@ -66,6 +66,8 @@ class AppState extends ChangeNotifier {
       db: db,
       client: client,
       deviceName: settings.deviceName,
+      conflictPolicy: settings.conflictPolicy,
+      fastScan: settings.fastScan,
     );
   }
 

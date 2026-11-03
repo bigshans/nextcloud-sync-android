@@ -151,5 +151,9 @@ RECEIVE_BOOT_COMPLETED（重排周期任务）
 - 目录自身不参与 mtime 比较（`planner.dart` 的 `dirLocalChanged`），否则「远程删了目录里的文件」会被我们自己的删除操作误判为本地修改
 - 远程列目录失败会让整次同步失败，而不是当作「远程为空」，避免误删全部本地文件
 - 删除安全阀阈值：单次删除数 > 20 且 > 基线 50% 时中止
-- 冲突副本命名：`name (conflict YYYY-MM-DD HHMM from 设备名).ext`，本地与远程各留一份
+- 冲突副本命名与官方客户端一致：`name (conflicted copy 设备名 yyyy-MM-dd hhmmss).ext`（`lib/sync/conflict_name.dart`，含大小写冲突的 `(case clash from ...)` 识别）
+- 冲突策略全局单一：`newest`（默认，比较 mtime）/`preferLocal`/`preferRemote`/`keepBoth`/`ask`；非 ask 策略在同一次同步内直接落地，并在成功后清空该配对的待处理冲突
+- 传输 4 路并发（`_TaskPool`），结构操作（建目录/删除/改名）作为顺序屏障
+- 快速扫描：`file_state` 同时充当远程缓存，目录 etag 未变则复用整棵子树；可用设置关闭做全量扫描
+- 远程变更判断先比 size 再比 etag：Nextcloud 的 etag 由 mtime 派生（秒级），同一秒内两次写入可能同 etag
 - 冲突页的三个选项在「一侧已删除」时语义为：保留本地=删远程；保留远程=删本地
