@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:path_provider/path_provider.dart';
 
 import '../models/models.dart';
 import '../util/paths.dart';
@@ -42,6 +45,7 @@ class BackupBundle {
           'notify': settings.notify,
           'conflictPolicy': settings.conflictPolicy.name,
           'fastScan': settings.fastScan,
+          'autoBackup': settings.autoBackup,
         },
         'pairs': [
           for (final p in pairs)
@@ -96,6 +100,7 @@ class BackupBundle {
           orElse: () => ConflictPolicy.newest,
         ),
         fastScan: (s['fastScan'] as bool?) ?? true,
+        autoBackup: (s['autoBackup'] as bool?) ?? true,
       );
     }
     final pairs = <Pair>[];
@@ -204,3 +209,26 @@ BackupBundle buildBundle({
       settings: settings,
       pairs: pairs,
     );
+
+/// Writes an automatic backup of the configuration (without the password).
+/// Prefers a user visible folder so it survives reinstalling the app; falls
+/// back to the app's external files directory.
+Future<String?> writeAutoBackup(String json) async {
+  Directory? target;
+  try {
+    final docs = Directory('/storage/emulated/0/Documents/NextcloudSync');
+    await docs.create(recursive: true);
+    target = docs;
+  } catch (_) {
+    target = null;
+  }
+  if (target == null) {
+    final ext = await getExternalStorageDirectory();
+    if (ext == null) return null;
+    target = Directory('${ext.path}/backup');
+    await target.create(recursive: true);
+  }
+  final file = File('${target.path}/ncsync-config.json');
+  await file.writeAsString(json, flush: true);
+  return file.path;
+}

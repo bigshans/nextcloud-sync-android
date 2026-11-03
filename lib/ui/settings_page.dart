@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 
 import '../state/app_state.dart';
+import '../util/format.dart';
 import '../sync/notifications.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -219,6 +220,36 @@ class _SettingsPageState extends State<SettingsPage> {
             title: const Text('导出配置（不含密码）'),
             subtitle: const Text('导入后需要重新登录，适合分享配置结构'),
             onTap: () => _export(includeCredentials: false),
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.backup_outlined),
+            title: const Text('自动备份配置（不含密码）'),
+            subtitle: Text(
+                '配置变化和每次同步后写入 Documents/NextcloudSync/ncsync-config.json'
+                '（卸载重装也不会丢；密码需重新登录或手动导出含密码的版本）'
+                '${state.lastAutoBackupAt == null ? '' : '\n上次备份：${formatTime(state.lastAutoBackupAt)}'}'),
+            value: s.autoBackup,
+            onChanged: (v) async {
+              final messenger = ScaffoldMessenger.of(context);
+              await state.saveSettings(s.copyWith(autoBackup: v));
+              if (v) {
+                final path = await state.autoBackupNow();
+                if (path != null) {
+                  messenger.showSnackBar(
+                      SnackBar(content: Text('已备份到 $path')));
+                }
+              }
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.save_outlined),
+            title: const Text('立即备份'),
+            onTap: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              final path = await state.autoBackupNow();
+              messenger.showSnackBar(SnackBar(
+                  content: Text(path == null ? '备份失败（检查存储权限）' : '已备份到 $path')));
+            },
           ),
           ListTile(
             leading: const Icon(Icons.download_outlined),

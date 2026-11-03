@@ -20,7 +20,16 @@ void main() {
   const user = String.fromEnvironment('NC_USER');
   const pass = String.fromEnvironment('NC_PASS');
 
+  // Safety guard: `flutter test -d <device>` uninstalls the app afterwards,
+  // which wipes user data. Only run this on an emulator or a spare device.
+  const deviceTestOk = bool.fromEnvironment('NC_DEVICE_TEST_OK');
+
   test('sync lifecycle', () async {
+    if (!deviceTestOk) {
+      // ignore: avoid_print
+      print('SKIP: pass --dart-define=NC_DEVICE_TEST_OK=true to run');
+      return;
+    }
     if (pass.isEmpty) return;
 
     final ext = await getExternalStorageDirectory();

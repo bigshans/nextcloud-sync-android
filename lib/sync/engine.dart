@@ -20,7 +20,7 @@ class SyncEngine {
     required this.db,
     required this.client,
     required this.deviceName,
-    this.concurrency = 4,
+    this.concurrency = 8,
     this.conflictPolicy = ConflictPolicy.newest,
     this.fastScan = true,
   });
@@ -81,16 +81,46 @@ class SyncEngine {
         await Directory(root).create(recursive: true);
       }
 
-      // 1. The remote root must exist.
-      if (await client.stat(pair.remotePath) == null) {
+      // 1. The remote root must exist, and its etag tells us whether anything
+      // below it changed at all.
+      var rootEntry = await client.stat(pair.remotePath);
+      if (rootEntry == null) {
         await client.mkdirs(pair.remotePath);
+        rootEntry = await client.stat(pair.remotePath);
       }
+      final rootEtagKey = 'root_etag_${pair.id}';
+      final cachedRootEtag = await db.getSetting(rootEtagKey);
 
       // 2. Scan both sides. The last baseline doubles as a remote cache so
       // unchanged directory subtrees can be skipped entirely.
       final baseline = await db.loadBaselines(pair.id!);
-      progress('扫描远程');
-      final remote = await _scanRemote(pair, progress, cancel, baseline);
+      Map<String, RemoteEntry> remote;
+      final rootUnchanged = fastScan &&
+          rootEntry?.etag != null &&
+          cachedRootEtag == rootEntry!.etag &&
+          baseline.isNotEmpty;
+      if (rootUnchanged) {
+        // Nothing changed anywhere below the pair root: reuse the last
+        // snapshot instead of listing the tree.
+        remote = {
+          for (final b in baseline.values)
+            pathKey(b.path): RemoteEntry(
+              path: b.path,
+              isDir: b.isDir,
+              etag: b.etag,
+              mtimeMs: b.remoteMtimeMs,
+              size: b.remoteSize,
+            ),
+        };
+        await db.log(pair.id, 'debug', '远程根 etag 未变，跳过目录扫描');
+        progress('扫描远程', done: remote.length);
+      } else {
+        progress('扫描远程');
+        remote = await _scanRemote(pair, progress, cancel, baseline);
+        if (report.errors == 0 && cancel?.isPaused != true) {
+          await db.setSetting(rootEtagKey, rootEntry?.etag);
+        }
+      }
       if (cancel?.isPaused == true) {
         report.paused = true;
         return report.finish();
@@ -259,6 +289,11 @@ class SyncEngine {
       for (final action in plan.actions) {
         if (fatal || cancel?.isPaused == true) break;
         if (_isTransfer(action.kind)) {
+          await pool.acquire();
+          if (fatal || cancel?.isPaused == true) {
+            pool.releaseIdle();
+            break;
+          }
           pool.submit(() async {
             progress('同步',
                 done: done,
@@ -271,11 +306,6 @@ class SyncEngine {
             }
             done++;
           });
-          // Keep the queue bounded so a pause request is honoured within one
-          // small wave instead of after thousands of queued transfers.
-          if (pool.queued >= concurrency) {
-            await pool.drain();
-          }
         } else {
           // Ordering barrier: let queued transfers finish first.
           await pool.drain();
@@ -790,44 +820,62 @@ class _ReportBuilder {
       );
 }
 
-/// Runs up to [size] async tasks concurrently and supports a drain barrier.
+/// Runs up to [size] async tasks concurrently. [acquire] applies backpressure
+/// so the producer can keep the pipeline full while still honouring a pause
+/// request within one transfer.
 class _TaskPool {
   _TaskPool(this.size);
   final int size;
-  final List<Future<void> Function()> _queue = [];
-  int _running = 0;
+  int _active = 0;
+  final List<Completer<void>> _waiters = [];
   Completer<void>? _idle;
 
-  void submit(Future<void> Function() task) {
-    _queue.add(task);
-    _pump();
+  Future<void> acquire() {
+    if (_active < size) {
+      _active++;
+      return Future<void>.value();
+    }
+    final completer = Completer<void>();
+    _waiters.add(completer);
+    return completer.future;
   }
 
-  void _pump() {
-    while (_running < size && _queue.isNotEmpty) {
-      final task = _queue.removeAt(0);
-      _running++;
-      Future<void>(() async {
-        try {
-          await task();
-        } catch (_) {
-          // Errors are handled inside the task itself.
-        }
-      }).whenComplete(() {
-        _running--;
-        _pump();
-        if (_running == 0 && _queue.isEmpty) {
-          _idle?.complete();
-          _idle = null;
-        }
-      });
+  /// Gives back a slot that was acquired but never used.
+  void releaseIdle() {
+    if (_waiters.isNotEmpty) {
+      _waiters.removeAt(0).complete();
+      return;
+    }
+    _active--;
+    if (_active == 0) {
+      _idle?.complete();
+      _idle = null;
     }
   }
 
-  int get queued => _queue.length;
+  void submit(Future<void> Function() task) {
+    Future<void>(() async {
+      try {
+        await task();
+      } catch (_) {
+        // Errors are handled inside the task itself.
+      }
+    }).whenComplete(() {
+      if (_waiters.isNotEmpty) {
+        // Hand the slot directly to the next waiting task.
+        _waiters.removeAt(0).complete();
+      } else {
+        _active--;
+        if (_active == 0) {
+          _idle?.complete();
+          _idle = null;
+        }
+      }
+    });
+  }
 
   Future<void> drain() {
-    if (_running == 0 && _queue.isEmpty) return Future<void>.value();
+    if (_active == 0) return Future<void>.value();
     _idle ??= Completer<void>();
     return _idle!.future;
   }

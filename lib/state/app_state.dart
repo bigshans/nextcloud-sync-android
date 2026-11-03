@@ -31,6 +31,7 @@ class AppState extends ChangeNotifier {
   AppSettings settings = const AppSettings();
   List<Pair> pairs = [];
   int pendingConflicts = 0;
+  int? lastAutoBackupAt;
   bool initialized = false;
   bool syncing = false;
   SyncProgress? progress;
@@ -76,6 +77,8 @@ class AppState extends ChangeNotifier {
       account = await auth.load();
       settings = await SettingsStore(db).load();
       pairs = await db.listPairs();
+      final backupTs = int.tryParse(await db.getSetting('last_auto_backup') ?? '');
+      if (backupTs != null) lastAutoBackupAt = backupTs;
       pendingConflicts = (await db.allPendingConflicts()).length;
     } catch (e) {
       lastError = '初始化失败：$e';
@@ -93,6 +96,33 @@ class AppState extends ChangeNotifier {
   Future<void> reloadPairs() async {
     pairs = await db.listPairs();
     notifyListeners();
+  }
+
+  // ------------------------------------------------------------- auto backup
+
+  /// Writes a password-less copy of the configuration to
+  /// `/storage/emulated/0/Documents/NextcloudSync/ncsync-config.json` (or the
+  /// app folder when shared storage is not writable). Survives reinstalling —
+  /// unlike anything stored inside the app sandbox.
+  Future<String?> autoBackupNow() async {
+    if (!settings.autoBackup) return null;
+    try {
+      final json = await exportConfig(includeCredentials: false);
+      final path = await writeAutoBackup(json);
+      if (path != null) {
+        lastAutoBackupAt = DateTime.now().millisecondsSinceEpoch;
+        await db.setSetting('last_auto_backup', '$lastAutoBackupAt');
+        notifyListeners();
+      }
+      return path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _scheduleAutoBackup() {
+    // Fire and forget: never slow down a user action for a backup.
+    unawaited(autoBackupNow());
   }
 
   // ------------------------------------------------------------------- login
@@ -177,17 +207,20 @@ class AppState extends ChangeNotifier {
     );
     final id = await db.insertPair(pair);
     await reloadPairs();
+    _scheduleAutoBackup();
     return pair.copyWith(id: id);
   }
 
   Future<void> updatePair(Pair pair) async {
     await db.updatePair(pair);
     await reloadPairs();
+    _scheduleAutoBackup();
   }
 
   Future<void> deletePair(int id) async {
     await db.deletePair(id);
     await reloadPairs();
+    _scheduleAutoBackup();
   }
 
   static String normalizeRemote(String raw) => raw
@@ -282,6 +315,7 @@ class AppState extends ChangeNotifier {
       }
       await reloadPairs();
       await refreshPendingCount();
+      _scheduleAutoBackup();
       return report;
     } finally {
       syncing = false;
@@ -335,6 +369,7 @@ class AppState extends ChangeNotifier {
     pairs = await db.listPairs();
     await refreshPendingCount();
     await Scheduler.schedule(settings);
+    _scheduleAutoBackup();
     notifyListeners();
     return summary;
   }
@@ -344,6 +379,7 @@ class AppState extends ChangeNotifier {
     await SettingsStore(db).save(s);
     _engine = null;
     await Scheduler.schedule(s);
+    _scheduleAutoBackup();
     notifyListeners();
   }
 

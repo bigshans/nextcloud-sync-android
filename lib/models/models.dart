@@ -306,6 +306,7 @@ class AppSettings {
   final bool notify;
   final ConflictPolicy conflictPolicy;
   final bool fastScan;
+  final bool autoBackup;
 
   const AppSettings({
     this.deviceName = 'Android',
@@ -314,6 +315,7 @@ class AppSettings {
     this.notify = true,
     this.conflictPolicy = ConflictPolicy.newest,
     this.fastScan = true,
+    this.autoBackup = true,
   });
 
   AppSettings copyWith({
@@ -323,6 +325,7 @@ class AppSettings {
     bool? notify,
     ConflictPolicy? conflictPolicy,
     bool? fastScan,
+    bool? autoBackup,
   }) =>
       AppSettings(
         deviceName: deviceName ?? this.deviceName,
@@ -331,5 +334,6 @@ class AppSettings {
         notify: notify ?? this.notify,
         conflictPolicy: conflictPolicy ?? this.conflictPolicy,
         fastScan: fastScan ?? this.fastScan,
+        autoBackup: autoBackup ?? this.autoBackup,
       );
 }

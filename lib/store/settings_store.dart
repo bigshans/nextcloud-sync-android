@@ -14,6 +14,7 @@ class SettingsStore {
     final wifiOnly = (await _db.getSetting('wifi_only') ?? '0') == '1';
     final notify = (await _db.getSetting('notify') ?? '1') == '1';
     final fastScan = (await _db.getSetting('fast_scan') ?? '1') == '1';
+    final autoBackup = (await _db.getSetting('auto_backup') ?? '1') == '1';
     final policyName = await _db.getSetting('conflict_policy');
     final policy = ConflictPolicy.values.firstWhere(
       (p) => p.name == policyName,
@@ -26,6 +27,7 @@ class SettingsStore {
       notify: notify,
       conflictPolicy: policy,
       fastScan: fastScan,
+      autoBackup: autoBackup,
     );
   }
 
@@ -36,5 +38,6 @@ class SettingsStore {
     await _db.setSetting('notify', s.notify ? '1' : '0');
     await _db.setSetting('conflict_policy', s.conflictPolicy.name);
     await _db.setSetting('fast_scan', s.fastScan ? '1' : '0');
+    await _db.setSetting('auto_backup', s.autoBackup ? '1' : '0');
   }
 }

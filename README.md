@@ -24,6 +24,7 @@ Flutter + Material 3 实现，只支持 Android。
 - **暂停 / 继续**：同步过程中可随时暂停（当前这一小批传完后停下），已完成的部分不会重传，点「继续」从中断处接着做
 - **速度**：文件传输 4 路并发；默认开启「快速扫描」，用 Nextcloud 目录 etag 跳过整棵未变化子树（实测 100 个文件首次同步从 251s 降到 35s，无改动复扫 2.7s）
 - **配置导出 / 导入**：设置页可导出 JSON（可选是否包含应用密码），换机或重装后一键恢复账号、设置与全部同步配对；导入支持「合并」或「覆盖」
+- **自动备份**：默认开启，配置变化/同步后自动写入 `Documents/NextcloudSync/ncsync-config.json`（不含密码，卸载重装也不会丢）
 - **文件处理**：所有普通文件类型，支持隐藏文件、Unicode 文件名、符号链接（链接到文件按内容同步，链接到目录不递归以防环）、大于 32MB 的文件流式上传
 - **可观测**：同步进度、每个配对的最近结果、冲突列表、同步日志
 
@@ -64,6 +65,9 @@ flutter build apk --release
 | `POST_NOTIFICATIONS` | 同步结果通知（Android 13+） |
 | `RECEIVE_BOOT_COMPLETED` / `WAKE_LOCK` | 重启后恢复周期任务 |
 
+开发提示：`flutter test -d <设备>` 会在测试结束后**卸载应用**（数据一并清除）。
+因此集成测试默认跳过，必须显式传 `--dart-define=NC_DEVICE_TEST_OK=true`，并且只对模拟器执行。
+
 `MANAGE_EXTERNAL_STORAGE` 会导致无法上架 Google Play（政策限制）；自用、侧载或企业内部分发没有问题。
 
 ## 连接失败排查
@@ -102,10 +106,13 @@ flutter test                      # 单元测试 + 对真服务器的客户端/�
 flutter test test/engine_live_test.dart      # 引擎端到端（真实服务器）
 flutter test test/client_live_test.dart      # WebDAV 客户端（真实服务器）
 
-# 真机端到端
-flutter test integration_test/sync_engine_test.dart -d <device> \
+# 端到端（只用在模拟器或备用机上！）
+# `flutter test -d` 会在结束后卸载应用，真机上会丢配置。
+flutter test integration_test/sync_engine_test.dart -d emulator-5554 \
+  --dart-define=NC_DEVICE_TEST_OK=true \
   --dart-define=NC_SERVER=... --dart-define=NC_USER=... --dart-define=NC_PASS=...
-flutter test integration_test/ui_flow_test.dart -d <device> \
+flutter test integration_test/ui_flow_test.dart -d emulator-5554 \
+  --dart-define=NC_DEVICE_TEST_OK=true \
   --dart-define=NC_SERVER=... --dart-define=NC_USER=... --dart-define=NC_PASS=...
 ```
 

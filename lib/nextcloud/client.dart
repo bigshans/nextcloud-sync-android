@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:xml/xml.dart';
 
 import '../models/models.dart';
@@ -31,9 +32,20 @@ class NcClient {
     required this.appPassword,
     http.Client? httpClient,
   })  : server = server.replaceAll(RegExp(r'/+$'), ''),
-        _http = httpClient ?? http.Client();
+        _http = httpClient ?? _defaultClient();
 
   static final RegExp _trailingSlash = RegExp(r'/+$');
+
+  /// A connection pool wide enough for the transfer pool. Dart's HttpClient
+  /// keeps HTTP/1.1 connections alive, so raising the limit is what actually
+  /// enables parallel requests.
+  static http.Client _defaultClient() {
+    final inner = HttpClient()
+      ..maxConnectionsPerHost = 16
+      ..connectionTimeout = const Duration(seconds: 20)
+      ..idleTimeout = const Duration(seconds: 60);
+    return IOClient(inner);
+  }
 
   final String server;
   final String username;
