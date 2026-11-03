@@ -25,6 +25,9 @@ void main() {
 
     final state = AppState();
     await state.init();
+    // Never destroy the real login that is already on this device: remember it
+    // and restore it at the end of the test.
+    final previousAccount = state.account;
     if (state.loggedIn) {
       await state.logout();
     }
@@ -119,6 +122,11 @@ void main() {
     await state.deletePair(pairId);
     await tester.pumpAndSettle();
     if (local.existsSync()) local.deleteSync(recursive: true);
-    await state.logout();
+    if (previousAccount != null) {
+      await state.auth.save(previousAccount);
+      await state.init();
+    } else {
+      await state.logout();
+    }
   }, timeout: const Timeout(Duration(minutes: 15)));
 }

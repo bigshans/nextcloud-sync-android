@@ -199,6 +199,9 @@ class SyncReport {
   final int errors;
   final int elapsedMs;
   final String? fatalError;
+  final bool paused;
+  final int processed;
+  final int total;
   final List<String> messages;
 
   const SyncReport({
@@ -211,6 +214,9 @@ class SyncReport {
     this.errors = 0,
     this.elapsedMs = 0,
     this.fatalError,
+    this.paused = false,
+    this.processed = 0,
+    this.total = 0,
     this.messages = const [],
   });
 
@@ -218,6 +224,9 @@ class SyncReport {
 
   String get summary {
     if (fatalError != null) return '失败：$fatalError';
+    if (paused) {
+      return '已暂停（$processed/$total），可随时继续';
+    }
     if (uploaded + downloaded + deleted + conflicts + errors == 0) {
       return '已是最新';
     }
@@ -229,6 +238,21 @@ class SyncReport {
       if (errors > 0) '错误 $errors',
     ];
     return parts.join('，');
+  }
+}
+
+/// Cooperative pause token shared between the UI and the sync engine.
+class SyncCancelToken {
+  bool _paused = false;
+  bool _cancelled = false;
+
+  bool get isPaused => _paused;
+  bool get isCancelled => _cancelled;
+
+  void pause() => _paused = true;
+  void cancel() {
+    _cancelled = true;
+    _paused = true;
   }
 }
 

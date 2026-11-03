@@ -68,6 +68,9 @@ class AuthStore {
     await _storage.write(key: _kDevice, value: deviceId);
   }
 
+  /// Stable random id for this installation (used in conflict file names).
+  Future<String> ensureDeviceId() => _deviceId();
+
   Future<String> _deviceId() async {
     var id = await _storage.read(key: _kDevice);
     if (id == null || id.isEmpty) {

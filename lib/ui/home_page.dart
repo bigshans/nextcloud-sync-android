@@ -122,7 +122,14 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           if (state.progress != null)
-            _ProgressCard(progress: state.progress!),
+            _ProgressCard(
+              progress: state.progress!,
+              syncing: state.syncing,
+              paused: state.paused,
+              onPause: state.pauseSync,
+              onResume: () => state.resumeSync(),
+              onDismiss: state.dismissPaused,
+            ),
           Expanded(
             child: state.pairs.isEmpty
                 ? _EmptyState(onAdd: () async {
@@ -302,8 +309,21 @@ class _PairCard extends StatelessWidget {
 }
 
 class _ProgressCard extends StatelessWidget {
-  const _ProgressCard({required this.progress});
+  const _ProgressCard({
+    required this.progress,
+    required this.syncing,
+    required this.paused,
+    required this.onPause,
+    required this.onResume,
+    required this.onDismiss,
+  });
+
   final SyncProgress progress;
+  final bool syncing;
+  final bool paused;
+  final VoidCallback onPause;
+  final VoidCallback onResume;
+  final VoidCallback onDismiss;
 
   @override
   Widget build(BuildContext context) {
@@ -323,6 +343,25 @@ class _ProgressCard extends StatelessWidget {
                 Text(progress.phase,
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.outline)),
+                const SizedBox(width: 8),
+                if (syncing && !paused)
+                  TextButton.icon(
+                    onPressed: onPause,
+                    icon: const Icon(Icons.pause, size: 18),
+                    label: const Text('暂停'),
+                  )
+                else if (paused) ...[
+                  TextButton.icon(
+                    onPressed: onResume,
+                    icon: const Icon(Icons.play_arrow, size: 18),
+                    label: const Text('继续'),
+                  ),
+                  IconButton(
+                    tooltip: '关闭',
+                    onPressed: onDismiss,
+                    icon: const Icon(Icons.close, size: 18),
+                  ),
+                ],
               ],
             ),
             const SizedBox(height: 10),

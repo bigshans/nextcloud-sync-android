@@ -9,6 +9,7 @@ import '../models/models.dart';
 import '../nextcloud/client.dart';
 import '../nextcloud/login_flow.dart';
 import '../store/auth_store.dart';
+import '../store/backup.dart';
 import '../store/db.dart';
 import '../store/settings_store.dart';
 import '../sync/engine.dart';
@@ -35,6 +36,13 @@ class AppState extends ChangeNotifier {
   SyncProgress? progress;
   SyncReport? lastReport;
   String? lastError;
+
+  /// The pass currently running / the pass that was paused.
+  Pair? activePair;
+  Pair? pausedPair;
+  SyncCancelToken? _token;
+
+  bool get paused => pausedPair != null && !syncing;
 
   NcClient? _client;
   SyncEngine? _engine;
@@ -189,9 +197,30 @@ class AppState extends ChangeNotifier {
 
   // -------------------------------------------------------------------- sync
 
+  /// Asks the running sync to stop after the current file. Work already
+  /// transferred is kept; resuming continues where it left off.
+  void pauseSync() {
+    _token?.pause();
+    notifyListeners();
+  }
+
+  Future<SyncReport?> resumeSync() async {
+    final pair = pausedPair;
+    if (pair == null) return null;
+    pausedPair = null;
+    return syncPair(pair);
+  }
+
+  void dismissPaused() {
+    pausedPair = null;
+    progress = null;
+    notifyListeners();
+  }
+
   Future<void> syncAll({bool force = false}) async {
     final enabled = pairs.where((p) => p.enabled).toList();
     for (final pair in enabled) {
+      if (pausedPair != null) break;
       if (!syncing) await syncPair(pair, force: force);
     }
   }
@@ -208,7 +237,11 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return null;
     }
+    if (pausedPair?.id == pair.id) pausedPair = null;
+    final token = SyncCancelToken();
+    _token = token;
     syncing = true;
+    activePair = pair;
     lastError = null;
     progress = null;
     notifyListeners();
@@ -216,13 +249,25 @@ class AppState extends ChangeNotifier {
       final report = await engine.syncPair(
         pair,
         force: force,
+        cancel: token,
         onProgress: (p) {
           progress = p;
           notifyListeners();
         },
       );
       lastReport = report;
-      if (!report.ok) lastError = report.fatalError;
+      if (report.paused) {
+        pausedPair = pair;
+        progress = SyncProgress(
+          phase: '已暂停',
+          done: report.processed,
+          total: report.total,
+          pairName: pair.name,
+        );
+      } else {
+        pausedPair = null;
+      }
+      if (!report.ok && !report.paused) lastError = report.fatalError;
       if (settings.notify &&
           (report.uploaded + report.downloaded + report.deleted > 0 ||
               report.conflicts > 0 ||
@@ -238,7 +283,9 @@ class AppState extends ChangeNotifier {
       return report;
     } finally {
       syncing = false;
-      progress = null;
+      activePair = null;
+      _token = null;
+      if (pausedPair == null) progress = null;
       notifyListeners();
     }
   }
@@ -253,6 +300,42 @@ class AppState extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------- settings
+
+  // ------------------------------------------------------------ backup/restore
+
+  Future<String> exportConfig({required bool includeCredentials}) {
+    final bundle = buildBundle(
+      account: account,
+      settings: settings,
+      pairs: pairs,
+      includeCredentials: includeCredentials,
+    );
+    return Future.value(bundle.toJson());
+  }
+
+  Future<ImportSummary> importConfig(String raw,
+      {required bool replace}) async {
+    final bundle = BackupBundle.parse(raw);
+    final summary = await importBundle(db, bundle, replace: replace);
+    if (bundle.hasCredentials) {
+      final deviceId = await auth.ensureDeviceId();
+      account = Account(
+        server: bundle.server!,
+        username: bundle.username!,
+        appPassword: bundle.appPassword!,
+        deviceId: deviceId,
+      );
+      await auth.save(account!);
+      _client = null;
+      _engine = null;
+    }
+    settings = await SettingsStore(db).load();
+    pairs = await db.listPairs();
+    await refreshPendingCount();
+    await Scheduler.schedule(settings);
+    notifyListeners();
+    return summary;
+  }
 
   Future<void> saveSettings(AppSettings s) async {
     settings = s;

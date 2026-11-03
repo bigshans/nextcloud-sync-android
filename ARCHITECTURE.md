@@ -122,6 +122,30 @@ RECEIVE_BOOT_COMPLETED（重排周期任务）
    - `integration_test/sync_engine_test.dart`：同一流程在真机上跑通
    - `integration_test/ui_flow_test.dart`：真机 UI 流程（登录 → 添加配对 → 同步 → 远程文件校验）
 
+## 暂停 / 继续
+
+- `SyncCancelToken` 由 UI 持有，引擎在每个文件动作前检查
+- 暂停时先 flush 已完成的基线，再返回 `paused=true` 的报告（`SyncReport.processed/total`）
+- 继续 = 重新跑一次同步：已完成文件的基线已落库，`planSync` 自动跳过它们，只做剩余部分
+- 粒度是「文件之间」；正在传输的单个大文件会先传完
+
+## 配置备份格式
+
+```json
+{
+  "schema": "nextcloud-sync-config",
+  "version": 1,
+  "exportedAt": "2026-11-03T14:00:00Z",
+  "account": {"server": "https://...", "username": "...", "appPassword": "..."},
+  "settings": {"deviceName": "...", "intervalMinutes": 15, "wifiOnly": false, "notify": true},
+  "pairs": [{"name": "...", "localPath": "/storage/...", "remotePath": "Notes", "enabled": true}]
+}
+```
+
+- `account` 仅在「含密码导出」时写入（明文，导出前有警告）
+- 导入：`merge` 按 `(localPath, remotePath)` 去重；`replace` 先删除现有配对（不删除文件）
+- 导入后重新排程 WorkManager；含密码时直接恢复登录
+
 ## 实现备注
 
 - 目录自身不参与 mtime 比较（`planner.dart` 的 `dirLocalChanged`），否则「远程删了目录里的文件」会被我们自己的删除操作误判为本地修改

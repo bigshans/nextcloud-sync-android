@@ -45,6 +45,7 @@ class SyncEngine {
     Pair pair, {
     ProgressSink? onProgress,
     bool force = false,
+    SyncCancelToken? cancel,
   }) async {
     final report = _ReportBuilder(pair);
 
@@ -73,7 +74,11 @@ class SyncEngine {
 
       // 2. Scan both sides.
       progress('扫描远程');
-      final remote = await _scanRemote(pair, progress);
+      final remote = await _scanRemote(pair, progress, cancel);
+      if (cancel?.isPaused == true) {
+        report.paused = true;
+        return report.finish();
+      }
       progress('扫描本地');
       final localScan = await scanLocal(root, onCount: (c) {
         progress('扫描本地', done: c);
@@ -142,6 +147,15 @@ class SyncEngine {
       }
 
       for (final action in plan.actions) {
+        if (cancel?.isPaused == true) {
+          await flush();
+          report.paused = true;
+          report.processed = done;
+          report.total = total;
+          await db.log(pair.id, 'info', '同步已暂停（$done/$total）');
+          progress('已暂停', done: done, total: total);
+          return report.finish();
+        }
         progress('同步',
             done: done, total: total, current: '${_verb(action.kind)} /${action.path}');
         try {
@@ -234,6 +248,8 @@ class SyncEngine {
       }
 
       await flush();
+      report.processed = total;
+      report.total = total;
       progress('完成', done: total, total: total);
 
       if (report.errors == 0 && report.fatalError == null) {
@@ -371,6 +387,7 @@ class SyncEngine {
     Pair pair,
     void Function(String phase, {int done, int total, String? current})
         progress,
+    SyncCancelToken? cancel,
   ) async {
     final out = <String, RemoteEntry>{};
     final rootPrefix = normalizeRel(pair.remotePath);
@@ -387,6 +404,7 @@ class SyncEngine {
     }
 
     while (queue.isNotEmpty) {
+      if (cancel?.isPaused == true) break;
       final batch = <String>[];
       while (queue.isNotEmpty && batch.length < concurrency) {
         batch.add(queue.removeLast());
@@ -627,6 +645,9 @@ class _ReportBuilder {
   int deleted = 0;
   int conflicts = 0;
   int errors = 0;
+  bool paused = false;
+  int processed = 0;
+  int total = 0;
   String? fatalError;
   final List<String> messages = [];
   final Stopwatch _watch = Stopwatch()..start();
@@ -643,6 +664,9 @@ class _ReportBuilder {
         errors: errors,
         elapsedMs: _watch.elapsedMilliseconds,
         fatalError: fatalError,
+        paused: paused,
+        processed: processed,
+        total: total,
         messages: List.unmodifiable(messages),
       );
 }

@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -168,6 +172,26 @@ class _SettingsPageState extends State<SettingsPage> {
                   },
           ),
           const Divider(),
+          _section('备份与恢复', theme),
+          ListTile(
+            leading: const Icon(Icons.upload_file_outlined),
+            title: const Text('导出配置（含应用密码）'),
+            subtitle: const Text('JSON 文件，换机/重装后可直接恢复，注意妥善保管'),
+            onTap: () => _export(includeCredentials: true),
+          ),
+          ListTile(
+            leading: const Icon(Icons.upload_file),
+            title: const Text('导出配置（不含密码）'),
+            subtitle: const Text('导入后需要重新登录，适合分享配置结构'),
+            onTap: () => _export(includeCredentials: false),
+          ),
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('导入配置'),
+            subtitle: const Text('从 JSON 文件恢复账号、设置与同步配对'),
+            onTap: _import,
+          ),
+          const Divider(),
           _section('关于', theme),
           const ListTile(
             leading: Icon(Icons.info_outline),
@@ -179,6 +203,96 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ),
     );
+  }
+
+  Future<void> _export({required bool includeCredentials}) async {
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    if (includeCredentials) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('导出包含密码'),
+          content: const Text('导出的 JSON 里会包含 Nextcloud 应用密码（明文）。'
+              '请把文件保存到安全的位置，不要分享给他人。'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('继续导出')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    try {
+      final json = await state.exportConfig(
+          includeCredentials: includeCredentials);
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: '保存配置',
+        fileName: 'ncsync-config${includeCredentials ? '' : '-nopass'}.json',
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        bytes: utf8.encode(json),
+      );
+      if (path == null) return;
+      messenger.showSnackBar(SnackBar(content: Text('已导出到 $path')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('导出失败：$e')));
+    }
+  }
+
+  Future<void> _import() async {
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    String raw;
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: '选择配置文件',
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: true,
+      );
+      final file = result?.files.single;
+      if (file == null) return;
+      final bytes = file.bytes ??
+          (file.path != null ? await File(file.path!).readAsBytes() : null);
+      if (bytes == null) throw '无法读取文件';
+      raw = utf8.decode(bytes);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('读取失败：$e')));
+      return;
+    }
+
+    if (!mounted) return;
+    final mode = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('导入方式'),
+        content: const Text('「合并」保留现有配对并跳过重复项；'
+            '「覆盖」会先删除现有配对（不会删除文件）。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, 'merge'),
+              child: const Text('合并')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, 'replace'),
+              child: const Text('覆盖')),
+        ],
+      ),
+    );
+    if (mode == null) return;
+    try {
+      final summary =
+          await state.importConfig(raw, replace: mode == 'replace');
+      messenger.showSnackBar(SnackBar(content: Text('导入完成：${summary.message}')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('导入失败：$e')));
+    }
   }
 
   Widget _section(String title, ThemeData theme) => Padding(
