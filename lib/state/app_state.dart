@@ -1,0 +1,286 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:permission_handler/permission_handler.dart';
+
+import '../models/models.dart';
+import '../nextcloud/client.dart';
+import '../nextcloud/login_flow.dart';
+import '../store/auth_store.dart';
+import '../store/db.dart';
+import '../store/settings_store.dart';
+import '../sync/engine.dart';
+import '../sync/notifications.dart';
+import '../sync/scheduler.dart';
+
+class AppState extends ChangeNotifier {
+  AppState({
+    AppDb? db,
+    AuthStore? auth,
+  })  : db = db ?? AppDb.instance,
+        auth = auth ?? AuthStore();
+
+  final AppDb db;
+  final AuthStore auth;
+
+  Account? account;
+  AppSettings settings = const AppSettings();
+  List<Pair> pairs = [];
+  int pendingConflicts = 0;
+  bool initialized = false;
+  bool syncing = false;
+  SyncProgress? progress;
+  SyncReport? lastReport;
+  String? lastError;
+
+  NcClient? _client;
+  SyncEngine? _engine;
+
+  bool get loggedIn => account != null;
+
+  NcClient get client {
+    final a = account;
+    if (a == null) throw StateError('not logged in');
+    return _client ??= NcClient(
+      server: a.server,
+      username: a.username,
+      appPassword: a.appPassword,
+    );
+  }
+
+  SyncEngine get engine {
+    final a = account;
+    if (a == null) throw StateError('not logged in');
+    return _engine ??= SyncEngine(
+      db: db,
+      client: client,
+      deviceName: settings.deviceName,
+    );
+  }
+
+  Future<void> init() async {
+    try {
+      account = await auth.load();
+      settings = await SettingsStore(db).load();
+      pairs = await db.listPairs();
+      pendingConflicts = (await db.allPendingConflicts()).length;
+    } catch (e) {
+      lastError = '初始化失败：$e';
+    } finally {
+      initialized = true;
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshPendingCount() async {
+    pendingConflicts = (await db.allPendingConflicts()).length;
+    notifyListeners();
+  }
+
+  Future<void> reloadPairs() async {
+    pairs = await db.listPairs();
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------------- login
+
+  Future<LoginFlowSession> startLoginFlow(String server) async {
+    final normalized = _normalizeServer(server);
+    final status = await NcClient.serverStatus(normalized, http.Client());
+    if (status['installed'] != true) {
+      throw NcException('该地址不是可用的 Nextcloud 服务器');
+    }
+    return LoginFlow(http.Client()).start(normalized);
+  }
+
+  Future<void> finishLoginFlow(LoginFlowSession session) async {
+    final result =
+        await LoginFlow(http.Client()).waitForApproval(session);
+    await _storeAccount(result.server, result.loginName, result.appPassword);
+  }
+
+  Future<void> manualLogin(
+      String server, String username, String password) async {
+    final normalized = _normalizeServer(server);
+    final c = NcClient(
+      server: normalized,
+      username: username.trim(),
+      appPassword: password.trim(),
+    );
+    await c.verify();
+    c.close();
+    await _storeAccount(normalized, username.trim(), password.trim());
+  }
+
+  Future<void> _storeAccount(
+      String server, String username, String password) async {
+    final existing = await auth.load();
+    account = Account(
+      server: _normalizeServer(server),
+      username: username,
+      appPassword: password,
+      deviceId: existing?.deviceId ?? '',
+    );
+    await auth.save(account!);
+    _client = null;
+    _engine = null;
+    await refreshPendingCount();
+    await Scheduler.schedule(settings);
+    notifyListeners();
+  }
+
+  Future<void> logout() async {
+    await Scheduler.cancel();
+    await Scheduler.init();
+    await auth.clear();
+    account = null;
+    _client?.close();
+    _client = null;
+    _engine = null;
+    pairs = [];
+    notifyListeners();
+  }
+
+  static String _normalizeServer(String raw) {
+    var s = raw.trim();
+    if (!s.startsWith('http://') && !s.startsWith('https://')) {
+      s = 'https://$s';
+    }
+    return s.replaceAll(RegExp(r'/+$'), '');
+  }
+
+  // ------------------------------------------------------------------- pairs
+
+  Future<Pair> addPair({
+    required String name,
+    required String localPath,
+    required String remotePath,
+  }) async {
+    final pair = Pair(
+      name: name.trim().isEmpty ? localPath.split('/').last : name.trim(),
+      localPath: localPath.trim(),
+      remotePath: normalizeRemote(remotePath),
+      createdAt: DateTime.now().millisecondsSinceEpoch,
+    );
+    final id = await db.insertPair(pair);
+    await reloadPairs();
+    return pair.copyWith(id: id);
+  }
+
+  Future<void> updatePair(Pair pair) async {
+    await db.updatePair(pair);
+    await reloadPairs();
+  }
+
+  Future<void> deletePair(int id) async {
+    await db.deletePair(id);
+    await reloadPairs();
+  }
+
+  static String normalizeRemote(String raw) => raw
+      .trim()
+      .replaceAll('\\', '/')
+      .split('/')
+      .where((e) => e.isNotEmpty && e != '.')
+      .join('/');
+
+  // -------------------------------------------------------------------- sync
+
+  Future<void> syncAll({bool force = false}) async {
+    final enabled = pairs.where((p) => p.enabled).toList();
+    for (final pair in enabled) {
+      if (!syncing) await syncPair(pair, force: force);
+    }
+  }
+
+  Future<SyncReport?> syncPair(Pair pair, {bool force = false}) async {
+    if (syncing) return null;
+    if (!loggedIn) {
+      lastError = '请先登录';
+      notifyListeners();
+      return null;
+    }
+    syncing = true;
+    lastError = null;
+    progress = null;
+    notifyListeners();
+    try {
+      final report = await engine.syncPair(
+        pair,
+        force: force,
+        onProgress: (p) {
+          progress = p;
+          notifyListeners();
+        },
+      );
+      lastReport = report;
+      if (!report.ok) lastError = report.fatalError;
+      if (settings.notify &&
+          (report.uploaded + report.downloaded + report.deleted > 0 ||
+              report.conflicts > 0 ||
+              !report.ok)) {
+        await Notifications.show(
+          '${pair.name}：${report.summary}',
+          '上传 ${report.uploaded}，下载 ${report.downloaded}，'
+          '删除 ${report.deleted}，冲突 ${report.conflicts}，错误 ${report.errors}',
+        );
+      }
+      await reloadPairs();
+      await refreshPendingCount();
+      return report;
+    } finally {
+      syncing = false;
+      progress = null;
+      notifyListeners();
+    }
+  }
+
+  Future<List<ConflictRow>> pendingConflictsOf(int pairId) =>
+      db.conflicts(pairId, resolved: false);
+
+  Future<void> resolveConflict(
+      ConflictRow conflict, ConflictChoice choice) async {
+    await engine.resolveConflict(conflict, choice);
+    await refreshPendingCount();
+  }
+
+  // ---------------------------------------------------------------- settings
+
+  Future<void> saveSettings(AppSettings s) async {
+    settings = s;
+    await SettingsStore(db).save(s);
+    _engine = null;
+    await Scheduler.schedule(s);
+    notifyListeners();
+  }
+
+  Future<String> serverVersion() async {
+    final a = account;
+    if (a == null) return '';
+    final status = await NcClient.serverStatus(a.server, http.Client());
+    return (status['versionstring'] as String?) ?? '';
+  }
+
+  // ------------------------------------------------------------------ helpers
+
+  static Future<bool> hasAllFilesAccess() async =>
+      Permission.manageExternalStorage.isGranted;
+
+  static Future<bool> requestAllFilesAccess() async {
+    final status = await Permission.manageExternalStorage.request();
+    return status.isGranted;
+  }
+
+  static String defaultLocalRoot() {
+    if (Platform.isAndroid) return '/storage/emulated/0/NextcloudSync';
+    return '${Platform.environment['HOME']}/NextcloudSync';
+  }
+
+  @override
+  void dispose() {
+    _client?.close();
+    super.dispose();
+  }
+}

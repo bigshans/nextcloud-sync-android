@@ -1,0 +1,277 @@
+import 'package:flutter/foundation.dart';
+
+/// A sync pair: one local directory mirrored to one remote directory.
+class Pair {
+  final int? id;
+  final String name;
+  final String localPath;
+  final String remotePath; // relative to /remote.php/dav/files/<user>/, no leading slash
+  final bool enabled;
+  final int createdAt;
+  final int? lastSyncAt;
+  final String? lastResult;
+
+  const Pair({
+    this.id,
+    required this.name,
+    required this.localPath,
+    required this.remotePath,
+    this.enabled = true,
+    required this.createdAt,
+    this.lastSyncAt,
+    this.lastResult,
+  });
+
+  Pair copyWith({
+    int? id,
+    String? name,
+    String? localPath,
+    String? remotePath,
+    bool? enabled,
+    int? lastSyncAt,
+    String? lastResult,
+  }) =>
+      Pair(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        localPath: localPath ?? this.localPath,
+        remotePath: remotePath ?? this.remotePath,
+        enabled: enabled ?? this.enabled,
+        createdAt: createdAt,
+        lastSyncAt: lastSyncAt ?? this.lastSyncAt,
+        lastResult: lastResult ?? this.lastResult,
+      );
+
+  Map<String, Object?> toMap() => {
+        if (id != null) 'id': id,
+        'name': name,
+        'local_path': localPath,
+        'remote_path': remotePath,
+        'enabled': enabled ? 1 : 0,
+        'created_at': createdAt,
+        'last_sync_at': lastSyncAt,
+        'last_result': lastResult,
+      };
+
+  static Pair fromMap(Map<String, Object?> m) => Pair(
+        id: m['id'] as int?,
+        name: m['name'] as String,
+        localPath: m['local_path'] as String,
+        remotePath: m['remote_path'] as String,
+        enabled: (m['enabled'] as int? ?? 1) == 1,
+        createdAt: m['created_at'] as int? ?? 0,
+        lastSyncAt: m['last_sync_at'] as int?,
+        lastResult: m['last_result'] as String?,
+      );
+}
+
+class RemoteEntry {
+  final String path;
+  final bool isDir;
+  final String? etag;
+  final int? mtimeMs;
+  final int? size;
+
+  const RemoteEntry({
+    required this.path,
+    required this.isDir,
+    this.etag,
+    this.mtimeMs,
+    this.size,
+  });
+
+  @override
+  String toString() => 'R($path, dir=$isDir, etag=$etag, size=$size)';
+}
+
+class LocalEntry {
+  final String path;
+  final bool isDir;
+  final int size;
+  final int mtimeMs;
+  final bool isLink;
+
+  const LocalEntry({
+    required this.path,
+    required this.isDir,
+    required this.size,
+    required this.mtimeMs,
+    this.isLink = false,
+  });
+
+  @override
+  String toString() => 'L($path, dir=$isDir, size=$size, mtime=$mtimeMs)';
+}
+
+/// Last synced state of a path, used as the three-way merge base.
+class Baseline {
+  final String path;
+  final bool isDir;
+  final String? etag;
+  final int? remoteMtimeMs;
+  final int? remoteSize;
+  final int? localMtimeMs;
+  final int? localSize;
+
+  const Baseline({
+    required this.path,
+    required this.isDir,
+    this.etag,
+    this.remoteMtimeMs,
+    this.remoteSize,
+    this.localMtimeMs,
+    this.localSize,
+  });
+}
+
+enum ActionKind {
+  upload,
+  download,
+  deleteLocal,
+  deleteRemote,
+  makeLocalDir,
+  makeRemoteDir,
+  /// Content identical on both sides (or both directories): only refresh baseline.
+  refresh,
+  /// Both sides changed: keep both copies.
+  keepBoth,
+  /// Cannot be decided automatically; needs a user decision.
+  needsDecision,
+  /// Both sides are gone; just drop the stored baseline.
+  forget,
+}
+
+class SyncAction {
+  final ActionKind kind;
+  final String path;
+  final bool isDir;
+  final String? reason;
+
+  const SyncAction(this.kind, this.path,
+      {this.isDir = false, this.reason});
+
+  @override
+  String toString() => '$kind($path)${reason == null ? '' : ' [$reason]'}';
+}
+
+class ConflictRow {
+  final int id;
+  final int pairId;
+  final String path;
+  final String kind;
+  final String? detail;
+  final int createdAt;
+  final int resolved;
+
+  const ConflictRow({
+    required this.id,
+    required this.pairId,
+    required this.path,
+    required this.kind,
+    this.detail,
+    required this.createdAt,
+    required this.resolved,
+  });
+}
+
+class LogRow {
+  final int id;
+  final int? pairId;
+  final int ts;
+  final String level;
+  final String message;
+  const LogRow({
+    required this.id,
+    required this.pairId,
+    required this.ts,
+    required this.level,
+    required this.message,
+  });
+}
+
+class SyncReport {
+  final int pairId;
+  final String pairName;
+  final int uploaded;
+  final int downloaded;
+  final int deleted;
+  final int conflicts;
+  final int errors;
+  final int elapsedMs;
+  final String? fatalError;
+  final List<String> messages;
+
+  const SyncReport({
+    required this.pairId,
+    required this.pairName,
+    this.uploaded = 0,
+    this.downloaded = 0,
+    this.deleted = 0,
+    this.conflicts = 0,
+    this.errors = 0,
+    this.elapsedMs = 0,
+    this.fatalError,
+    this.messages = const [],
+  });
+
+  bool get ok => fatalError == null;
+
+  String get summary {
+    if (fatalError != null) return '失败：$fatalError';
+    if (uploaded + downloaded + deleted + conflicts + errors == 0) {
+      return '已是最新';
+    }
+    final parts = <String>[
+      if (uploaded > 0) '上传 $uploaded',
+      if (downloaded > 0) '下载 $downloaded',
+      if (deleted > 0) '删除 $deleted',
+      if (conflicts > 0) '冲突 $conflicts',
+      if (errors > 0) '错误 $errors',
+    ];
+    return parts.join('，');
+  }
+}
+
+class SyncProgress {
+  final String phase;
+  final int done;
+  final int total;
+  final String? current;
+  final String? pairName;
+  const SyncProgress({
+    required this.phase,
+    this.done = 0,
+    this.total = 0,
+    this.current,
+    this.pairName,
+  });
+  double? get fraction => total > 0 ? done / total : null;
+}
+
+@immutable
+class AppSettings {
+  final String deviceName;
+  final int intervalMinutes;
+  final bool wifiOnly;
+  final bool notify;
+
+  const AppSettings({
+    this.deviceName = 'Android',
+    this.intervalMinutes = 15,
+    this.wifiOnly = false,
+    this.notify = true,
+  });
+
+  AppSettings copyWith({
+    String? deviceName,
+    int? intervalMinutes,
+    bool? wifiOnly,
+    bool? notify,
+  }) =>
+      AppSettings(
+        deviceName: deviceName ?? this.deviceName,
+        intervalMinutes: intervalMinutes ?? this.intervalMinutes,
+        wifiOnly: wifiOnly ?? this.wifiOnly,
+        notify: notify ?? this.notify,
+      );
+}
