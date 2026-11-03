@@ -33,7 +33,12 @@ Future<LocalScanResult> scanLocal(
   void Function(int count)? onCount,
   int maxEntries = 200000,
   int? workers,
+  Map<String, Baseline>? cache,
+  bool turbo = false,
 }) async {
+  if (turbo && cache != null && cache.isNotEmpty) {
+    return _scanTurbo(root, cache, maxEntries: maxEntries, onCount: onCount);
+  }
   final workerCount = workers ??
       (Platform.numberOfProcessors >= 4 ? 4 : Platform.numberOfProcessors)
           .clamp(1, 8);
@@ -103,11 +108,121 @@ LocalScanResult _merge(
       entries: entries, errors: errors, caseCollisions: collisions);
 }
 
+/// Turbo mode: never list a directory whose mtime matches the cached one; the
+/// cached subtree is reused as-is. File content edits do not change the parent
+/// folder's mtime, so a periodic full scan is required to pick them up.
+LocalScanResult _scanTurbo(
+  String root,
+  Map<String, Baseline> cache, {
+  required int maxEntries,
+  void Function(int count)? onCount,
+}) {
+  final entries = <String, LocalEntry>{};
+  final errors = <String>[];
+  final collisions = <String, String>{};
+  final children = <String, List<Baseline>>{};
+  for (final b in cache.values) {
+    children.putIfAbsent(parentOf(b.path), () => []).add(b);
+  }
+  var count = 0;
+
+  void addCachedSubtree(String dirRel) {
+    final stack = <String>[dirRel];
+    while (stack.isNotEmpty && count < maxEntries) {
+      final dir = stack.removeLast();
+      for (final b in children[dir] ?? const <Baseline>[]) {
+        _put(entries, collisions,
+            LocalEntry(
+              path: b.path,
+              isDir: b.isDir,
+              size: b.localSize ?? 0,
+              mtimeMs: b.localMtimeMs ?? 0,
+            ));
+        count++;
+        if (b.isDir) stack.add(b.path);
+      }
+    }
+  }
+
+  void walk(String abs, String rel) {
+    if (count >= maxEntries) return;
+    final type = FileSystemEntity.typeSync(abs, followLinks: false);
+    final isLink = type == FileSystemEntityType.link;
+    final FileStat stat;
+    try {
+      stat = FileStat.statSync(abs);
+    } catch (e) {
+      errors.add('读取失败 $abs: $e');
+      return;
+    }
+    if (stat.type == FileSystemEntityType.notFound) return;
+
+    final isDir = stat.type == FileSystemEntityType.directory;
+    if (rel.isNotEmpty) {
+      _put(entries, collisions,
+          LocalEntry(
+            path: rel,
+            isDir: isDir,
+            size: isDir ? 0 : stat.size,
+            mtimeMs: stat.modified.millisecondsSinceEpoch,
+            isLink: isLink,
+          ));
+      count++;
+      onCount?.call(count);
+    }
+
+    if (!isDir || isLink) return;
+
+    final key = pathKey(rel);
+    final cachedDir = cache[key];
+    if (cachedDir != null &&
+        cachedDir.localMtimeMs != null &&
+        cachedDir.localMtimeMs == stat.modified.millisecondsSinceEpoch) {
+      // Nothing was created/deleted/renamed here since the last full sync.
+      addCachedSubtree(rel);
+      count = entries.length;
+      onCount?.call(count);
+      return;
+    }
+
+    final List<FileSystemEntity> kids;
+    try {
+      kids = Directory(abs).listSync(followLinks: false);
+    } catch (e) {
+      errors.add('无法列出目录 $abs: $e');
+      return;
+    }
+    for (final entity in kids) {
+      final name = baseName(entity.path);
+      if (_isInternalTemp(name)) continue;
+      walk(entity.path, relativeOf(root, entity.path));
+    }
+  }
+
+  walk(root, '');
+  if (count >= maxEntries) {
+    errors.add('扫描条目超过上限 $maxEntries，已截断');
+  }
+  return LocalScanResult(
+      entries: entries, errors: errors, caseCollisions: collisions);
+}
+
 class _ShardJob {
   final String root;
   final List<String> dirs;
   final bool includeRootFiles;
   const _ShardJob(this.root, this.dirs, this.includeRootFiles);
+}
+
+void _put(Map<String, LocalEntry> entries, Map<String, String> collisions,
+    LocalEntry entry) {
+  final key = pathKey(entry.path);
+  final existing = entries[key];
+  if (existing == null) {
+    entries[key] = entry;
+  } else if (existing.path != entry.path) {
+    collisions[key] = '${existing.path} / ${entry.path}';
+  }
 }
 
 class _ShardResult {

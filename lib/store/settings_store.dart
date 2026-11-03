@@ -15,6 +15,10 @@ class SettingsStore {
     final notify = (await _db.getSetting('notify') ?? '1') == '1';
     final fastScan = (await _db.getSetting('fast_scan') ?? '1') == '1';
     final autoBackup = (await _db.getSetting('auto_backup') ?? '1') == '1';
+    final turboScan = (await _db.getSetting('turbo_scan') ?? '0') == '1';
+    final turboMinutes = int.tryParse(
+            await _db.getSetting('turbo_full_scan_minutes') ?? '') ??
+        60;
     final policyName = await _db.getSetting('conflict_policy');
     final policy = ConflictPolicy.values.firstWhere(
       (p) => p.name == policyName,
@@ -28,6 +32,8 @@ class SettingsStore {
       conflictPolicy: policy,
       fastScan: fastScan,
       autoBackup: autoBackup,
+      turboScan: turboScan,
+      turboFullScanMinutes: turboMinutes.clamp(15, 1440),
     );
   }
 
@@ -39,5 +45,8 @@ class SettingsStore {
     await _db.setSetting('conflict_policy', s.conflictPolicy.name);
     await _db.setSetting('fast_scan', s.fastScan ? '1' : '0');
     await _db.setSetting('auto_backup', s.autoBackup ? '1' : '0');
+    await _db.setSetting('turbo_scan', s.turboScan ? '1' : '0');
+    await _db.setSetting(
+        'turbo_full_scan_minutes', s.turboFullScanMinutes.toString());
   }
 }

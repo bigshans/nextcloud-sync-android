@@ -308,6 +308,14 @@ class AppSettings {
   final bool fastScan;
   final bool autoBackup;
 
+  /// Trust directory mtimes to skip re-reading unchanged folders. Much faster
+  /// on very large trees, but edits to existing files (which do not change the
+  /// parent folder's mtime) are only picked up by the periodic full scan.
+  final bool turboScan;
+
+  /// How often a full scan runs even in turbo mode.
+  final int turboFullScanMinutes;
+
   const AppSettings({
     this.deviceName = 'Android',
     this.intervalMinutes = 15,
@@ -316,6 +324,8 @@ class AppSettings {
     this.conflictPolicy = ConflictPolicy.newest,
     this.fastScan = true,
     this.autoBackup = true,
+    this.turboScan = false,
+    this.turboFullScanMinutes = 60,
   });
 
   AppSettings copyWith({
@@ -326,6 +336,8 @@ class AppSettings {
     ConflictPolicy? conflictPolicy,
     bool? fastScan,
     bool? autoBackup,
+    bool? turboScan,
+    int? turboFullScanMinutes,
   }) =>
       AppSettings(
         deviceName: deviceName ?? this.deviceName,
@@ -335,5 +347,8 @@ class AppSettings {
         conflictPolicy: conflictPolicy ?? this.conflictPolicy,
         fastScan: fastScan ?? this.fastScan,
         autoBackup: autoBackup ?? this.autoBackup,
+        turboScan: turboScan ?? this.turboScan,
+        turboFullScanMinutes:
+            turboFullScanMinutes ?? this.turboFullScanMinutes,
       );
 }

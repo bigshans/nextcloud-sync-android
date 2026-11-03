@@ -46,6 +46,8 @@ class BackupBundle {
           'conflictPolicy': settings.conflictPolicy.name,
           'fastScan': settings.fastScan,
           'autoBackup': settings.autoBackup,
+          'turboScan': settings.turboScan,
+          'turboFullScanMinutes': settings.turboFullScanMinutes,
         },
         'pairs': [
           for (final p in pairs)
@@ -101,6 +103,10 @@ class BackupBundle {
         ),
         fastScan: (s['fastScan'] as bool?) ?? true,
         autoBackup: (s['autoBackup'] as bool?) ?? true,
+        turboScan: (s['turboScan'] as bool?) ?? false,
+        turboFullScanMinutes:
+            ((s['turboFullScanMinutes'] as num?)?.toInt() ?? 60)
+                .clamp(15, 1440),
       );
     }
     final pairs = <Pair>[];

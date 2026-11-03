@@ -158,6 +158,74 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           SwitchListTile(
+            secondary: const Icon(Icons.rocket_launch_outlined),
+            title: const Text('极速模式（信任本地目录 mtime）'),
+            subtitle: Text(
+                '目录 mtime 没变就整棵子树跳过，不上报文件；'
+                '大目录树下快很多，但其他 App 对已有文件内容的修改要等全量校对才会被发现。'
+                '每 ${s.turboFullScanMinutes} 分钟自动全量校对一次。'),
+            value: s.turboScan,
+            onChanged: (v) async {
+              if (v) {
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('开启极速模式'),
+                    content: const Text(
+                        '极速模式不会逐个检查文件，只根据目录修改时间判断。'
+                        '如果别的 App 修改了文件内容（不改目录时间），'
+                        '这些修改要等到下一次全量校对才会上传。'
+                        '\n\n建议保留默认的定期全量校对，或随时手动「全量校对」。'),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('取消')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('开启')),
+                    ],
+                  ),
+                );
+                if (ok != true) return;
+              }
+              await state.saveSettings(s.copyWith(turboScan: v));
+            },
+          ),
+          if (s.turboScan)
+            ListTile(
+              leading: const Icon(Icons.timer),
+              title: const Text('全量校对间隔'),
+              trailing: DropdownButton<int>(
+                value: [15, 30, 60, 180, 360, 720]
+                        .contains(s.turboFullScanMinutes)
+                    ? s.turboFullScanMinutes
+                    : 60,
+                items: const [
+                  DropdownMenuItem(value: 15, child: Text('15 分钟')),
+                  DropdownMenuItem(value: 30, child: Text('30 分钟')),
+                  DropdownMenuItem(value: 60, child: Text('1 小时')),
+                  DropdownMenuItem(value: 180, child: Text('3 小时')),
+                  DropdownMenuItem(value: 360, child: Text('6 小时')),
+                  DropdownMenuItem(value: 720, child: Text('12 小时')),
+                ],
+                onChanged: (v) async {
+                  if (v == null) return;
+                  await state.saveSettings(
+                      s.copyWith(turboFullScanMinutes: v));
+                },
+              ),
+            ),
+          ListTile(
+            leading: const Icon(Icons.fact_check_outlined),
+            title: const Text('立即全量校对'),
+            subtitle: const Text('忽略极速缓存，完整扫描本地与远程并校正差异'),
+            onTap: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              await state.syncAll(fullScan: true);
+              messenger.showSnackBar(const SnackBar(content: Text('全量校对完成')));
+            },
+          ),
+          SwitchListTile(
             secondary: const Icon(Icons.bolt),
             title: const Text('快速扫描（跳过未变更的远程目录）'),
             subtitle: const Text(

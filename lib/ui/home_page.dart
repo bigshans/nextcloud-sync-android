@@ -85,9 +85,13 @@ class _HomePageState extends State<HomePage> {
                   await Navigator.of(context).push(
                       MaterialPageRoute(builder: (_) => const SettingsPage()));
                   break;
+                case 'full':
+                  await context.read<AppState>().syncAll(fullScan: true);
+                  break;
               }
             },
             itemBuilder: (_) => const [
+              PopupMenuItem(value: 'full', child: Text('全量校对同步')),
               PopupMenuItem(value: 'logs', child: Text('同步日志')),
               PopupMenuItem(value: 'settings', child: Text('设置')),
             ],

@@ -65,6 +65,8 @@ class Scheduler {
       deviceName: settings.deviceName,
       conflictPolicy: settings.conflictPolicy,
       fastScan: settings.fastScan,
+      turboScan: settings.turboScan,
+      turboFullScanMinutes: settings.turboFullScanMinutes,
     );
     var changed = 0;
     var conflicts = 0;

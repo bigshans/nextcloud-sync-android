@@ -23,6 +23,8 @@ class SyncEngine {
     this.concurrency = 8,
     this.conflictPolicy = ConflictPolicy.newest,
     this.fastScan = true,
+    this.turboScan = false,
+    this.turboFullScanMinutes = 60,
   });
 
   final AppDb db;
@@ -35,6 +37,10 @@ class SyncEngine {
 
   /// Reuse cached remote listings for directories whose etag did not change.
   final bool fastScan;
+
+  /// Trust cached local directory mtimes (极速模式).
+  final bool turboScan;
+  final int turboFullScanMinutes;
 
   static bool _isTransfer(ActionKind k) =>
       k == ActionKind.upload ||
@@ -59,6 +65,7 @@ class SyncEngine {
     Pair pair, {
     ProgressSink? onProgress,
     bool force = false,
+    bool fullScan = false,
     SyncCancelToken? cancel,
   }) async {
     final report = _ReportBuilder(pair);
@@ -125,11 +132,29 @@ class SyncEngine {
         report.paused = true;
         return report.finish();
       }
+      // 极速模式: reuse cached subtrees whose directory mtime is unchanged.
+      // A full scan is forced periodically (and on demand) so edits that do
+      // not touch the parent folder's mtime are still picked up eventually.
+      final lastFullKey = 'last_full_scan_${pair.id}';
+      final cleanKey = 'index_clean_${pair.id}';
+      final lastFull = int.tryParse(await db.getSetting(lastFullKey) ?? '') ?? 0;
+      final indexClean = (await db.getSetting(cleanKey) ?? '0') == '1';
+      final turboDue = turboScan &&
+          !fullScan &&
+          indexClean &&
+          DateTime.now().millisecondsSinceEpoch - lastFull <
+              turboFullScanMinutes * 60 * 1000;
+
       progress('扫描本地');
       final localScanWatch = Stopwatch()..start();
-      final localScan = await scanLocal(root, onCount: (c) {
-        progress('扫描本地', done: c);
-      });
+      final localScan = await scanLocal(
+        root,
+        turbo: turboDue,
+        cache: baseline,
+        onCount: (c) {
+          progress('扫描本地', done: c);
+        },
+      );
       localScanWatch.stop();
       report.errors += localScan.errors.length;
       for (final e in localScan.errors.take(5)) {
@@ -365,11 +390,20 @@ class SyncEngine {
       } else {
         await db.setPairResult(pair.id!, null, report.summary);
       }
+      if (report.errors == 0) {
+        await db.setSetting(cleanKey, '1');
+        if (!turboDue) {
+          await db.setSetting(lastFullKey, '${DateTime.now().millisecondsSinceEpoch}');
+        }
+      } else {
+        await db.setSetting(cleanKey, '0');
+      }
       await db.log(
           pair.id,
           'info',
           '同步完成：${report.summary}'
-              '（本地扫描 ${localScanWatch.elapsedMilliseconds}ms，'
+              '（本地扫描${turboDue ? '·极速' : ''} '
+              '${localScanWatch.elapsedMilliseconds}ms，'
               '共 ${localScan.entries.length} 项）');
       return report.finish();
     } catch (e, st) {

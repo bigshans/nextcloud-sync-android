@@ -69,6 +69,8 @@ class AppState extends ChangeNotifier {
       deviceName: settings.deviceName,
       conflictPolicy: settings.conflictPolicy,
       fastScan: settings.fastScan,
+      turboScan: settings.turboScan,
+      turboFullScanMinutes: settings.turboFullScanMinutes,
     );
   }
 
@@ -252,15 +254,16 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> syncAll({bool force = false}) async {
+  Future<void> syncAll({bool force = false, bool fullScan = false}) async {
     final enabled = pairs.where((p) => p.enabled).toList();
     for (final pair in enabled) {
       if (pausedPair != null) break;
-      if (!syncing) await syncPair(pair, force: force);
+      if (!syncing) await syncPair(pair, force: force, fullScan: fullScan);
     }
   }
 
-  Future<SyncReport?> syncPair(Pair pair, {bool force = false}) async {
+  Future<SyncReport?> syncPair(Pair pair,
+      {bool force = false, bool fullScan = false}) async {
     if (syncing) return null;
     if (!loggedIn) {
       lastError = '请先登录';
@@ -284,6 +287,7 @@ class AppState extends ChangeNotifier {
       final report = await engine.syncPair(
         pair,
         force: force,
+        fullScan: fullScan,
         cancel: token,
         onProgress: (p) {
           progress = p;
