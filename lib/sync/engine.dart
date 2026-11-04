@@ -98,6 +98,7 @@ class SyncEngine {
         downloaded: report.downloaded,
         deleted: report.deleted,
         failed: report.errors,
+        pending: (lastTotal - lastDone - active.length).clamp(0, 1 << 30),
       ));
     }
 
@@ -389,14 +390,24 @@ class SyncEngine {
           }
           final key =
               '${_isUpload(action.kind) ? 'upload' : 'download'}|${action.path}';
-          active[key] = ActiveTransfer(action.path, _verb(action.kind));
+          final entryKey = pathKey(action.path);
+          final expectedSize = _isUpload(action.kind)
+              ? (localScan.entries[entryKey]?.size ?? 0)
+              : (remote[entryKey]?.size ?? 0);
+          active[key] =
+              ActiveTransfer(action.path, _verb(action.kind), 0, expectedSize);
           pool.submit(() async {
             progress('同步',
                 done: done,
                 total: total,
                 current: '${_verb(action.kind)} /${action.path}');
+            final watch = Stopwatch()..start();
             try {
               await run(action);
+              if (watch.elapsedMilliseconds > 3000) {
+                await db.log(pair.id, 'debug',
+                    '${_verb(action.kind)} /${action.path} 用时 ${watch.elapsedMilliseconds}ms');
+              }
             } catch (e) {
               await onError(action, e);
               emit(force: true);
@@ -413,8 +424,13 @@ class SyncEngine {
               done: done,
               total: total,
               current: '${_verb(action.kind)} /${action.path}');
+          final watch = Stopwatch()..start();
           try {
             await run(action);
+            if (watch.elapsedMilliseconds > 3000) {
+              await db.log(pair.id, 'debug',
+                  '${_verb(action.kind)} /${action.path} 用时 ${watch.elapsedMilliseconds}ms');
+            }
           } catch (e) {
             await onError(action, e);
           }

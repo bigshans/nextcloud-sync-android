@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -312,7 +314,7 @@ class _PairCard extends StatelessWidget {
       );
 }
 
-class _ProgressCard extends StatelessWidget {
+class _ProgressCard extends StatefulWidget {
   const _ProgressCard({
     required this.progress,
     required this.syncing,
@@ -329,12 +331,39 @@ class _ProgressCard extends StatelessWidget {
   final VoidCallback onResume;
   final VoidCallback onDismiss;
 
-  /// Keeps the end of a long path visible ("…/journals/2025_05_09/202...").
+  @override
+  State<_ProgressCard> createState() => _ProgressCardState();
+}
+
+class _ProgressCardState extends State<_ProgressCard> {
   static String tail(String path, int max) =>
       path.length <= max ? path : '…${path.substring(path.length - max)}';
 
+  Timer? _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    // Keeps the "elapsed" label moving so a slow transfer is visibly alive.
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final progress = widget.progress;
+    final syncing = widget.syncing;
+    final paused = widget.paused;
+    final onPause = widget.onPause;
+    final onResume = widget.onResume;
+    final onDismiss = widget.onDismiss;
     final theme = Theme.of(context);
     final active = progress.active.take(3).toList();
     return Card(
@@ -379,7 +408,8 @@ class _ProgressCard extends StatelessWidget {
             Text(
               '上传 ${progress.uploaded} · 下载 ${progress.downloaded}'
               ' · 删除 ${progress.deleted}'
-              '${progress.failed > 0 ? ' · 失败 ${progress.failed}' : ''}',
+              '${progress.failed > 0 ? ' · 失败 ${progress.failed}' : ''}'
+              '${progress.pending > 0 ? ' · 排队 ${progress.pending}' : ''}',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.outline),
             ),
@@ -453,17 +483,24 @@ class _ActiveRow extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodyMedium),
                     ),
-                    if (transfer.total > 0)
-                      Text(
-                        '${formatBytes(transfer.done)} / ${formatBytes(transfer.total)}',
-                        style: theme.textTheme.labelSmall
-                            ?.copyWith(color: theme.colorScheme.outline),
-                      ),
+                    Text(
+                      transfer.total > 0
+                          ? '${formatBytes(transfer.done)} / ${formatBytes(transfer.total)}'
+                          : formatBytes(transfer.done),
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: theme.colorScheme.outline),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${(transfer.elapsedMs / 1000).toStringAsFixed(1)}s',
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: theme.colorScheme.primary),
+                    ),
                   ],
                 ),
                 if (parent.isNotEmpty)
                   Text(
-                    _ProgressCard.tail(parent, 52),
+                    _ProgressCardState.tail(parent, 52),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.labelSmall

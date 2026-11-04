@@ -330,6 +330,10 @@ class NcClient {
           ifMatch: ifMatch, onProgress: onProgress);
     }
     final bytes = await file.readAsBytes();
+    // Size-aware timeout: small files must not hang for hours when the
+    // connection stalls; large ones get proportionally more time.
+    final budget =
+        Duration(seconds: (45 + length ~/ (64 * 1024)).clamp(45, 600));
     final resp = await _send(
       () => http.Request('PUT', uriFor(relPath))
         ..headers.addAll(_headers({
@@ -337,7 +341,8 @@ class NcClient {
           if (ifMatch != null) 'If-Match': '"$ifMatch"',
         }))
         ..bodyBytes = bytes,
-      timeout: const Duration(hours: 2),
+      timeout: budget,
+      attempts: 2,
     );
     await resp.stream.drain<void>();
     onProgress?.call(length, length);
@@ -375,11 +380,12 @@ class NcClient {
         final responseFuture =
             HttpClients.io().send(req).timeout(const Duration(hours: 6));
         var sent = 0;
+        // A stalled socket must fail instead of hanging for hours.
         await req.sink.addStream(file.openRead().map((chunk) {
           sent += chunk.length;
           onProgress?.call(sent, length);
           return chunk;
-        }));
+        }).timeout(const Duration(seconds: 45)));
         await req.sink.close();
         final resp = await responseFuture;
         await resp.stream.drain<void>();
@@ -428,7 +434,7 @@ class NcClient {
     final sink = part.openWrite();
     var received = 0;
     try {
-      await for (final chunk in resp.stream) {
+      await for (final chunk in resp.stream.timeout(const Duration(seconds: 45))) {
         sink.add(chunk);
         received += chunk.length;
         onProgress?.call(received, total);

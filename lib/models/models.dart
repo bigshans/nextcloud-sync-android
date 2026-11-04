@@ -288,9 +288,13 @@ class ActiveTransfer {
   final String kind; // upload / download / conflict
   int done;
   int total;
-  ActiveTransfer(this.path, this.kind, [this.done = 0, this.total = 0]);
+  final int startedAt;
+  ActiveTransfer(this.path, this.kind, [this.done = 0, this.total = 0])
+      : startedAt = DateTime.now().millisecondsSinceEpoch;
 
   double? get fraction => total > 0 ? done / total : null;
+  int get elapsedMs =>
+      DateTime.now().millisecondsSinceEpoch - startedAt;
 }
 
 class SyncProgress {
@@ -304,6 +308,8 @@ class SyncProgress {
   final int downloaded;
   final int deleted;
   final int failed;
+  /// Transfers still waiting for a free slot.
+  final int pending;
 
   const SyncProgress({
     required this.phase,
@@ -316,6 +322,7 @@ class SyncProgress {
     this.downloaded = 0,
     this.deleted = 0,
     this.failed = 0,
+    this.pending = 0,
   });
 
   double? get fraction => total > 0 ? done / total : null;
