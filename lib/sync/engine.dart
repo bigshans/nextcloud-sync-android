@@ -71,6 +71,7 @@ class SyncEngine {
     SyncCancelToken? cancel,
   }) async {
     final report = _ReportBuilder(pair);
+    final startedAt = DateTime.now();
     final active = <String, ActiveTransfer>{};
     var lastDone = 0;
     var lastTotal = 0;
@@ -461,8 +462,9 @@ class SyncEngine {
           'info',
           '同步完成：${report.summary}'
               '（本地扫描${turboDue ? '·极速' : ''} '
-              '${localScanWatch.elapsedMilliseconds}ms，'
-              '共 ${localScan.entries.length} 项）');
+              '${localScanWatch.elapsedMilliseconds}ms/${localScan.entries.length} 项，'
+              '请求 ${client.requests} 次，'
+              '总耗时 ${DateTime.now().difference(startedAt).inMilliseconds}ms）');
       return report.finish();
     } catch (e, st) {
       report.fatalError = '$e';

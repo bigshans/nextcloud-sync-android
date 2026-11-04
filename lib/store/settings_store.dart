@@ -16,6 +16,8 @@ class SettingsStore {
     final fastScan = (await _db.getSetting('fast_scan') ?? '1') == '1';
     final autoBackup = (await _db.getSetting('auto_backup') ?? '1') == '1';
     final autoSync = (await _db.getSetting('auto_sync') ?? '1') == '1';
+    final concurrency =
+        int.tryParse(await _db.getSetting('transfer_concurrency') ?? '') ?? 0;
     final turboScan = (await _db.getSetting('turbo_scan') ?? '0') == '1';
     final turboMinutes = int.tryParse(
             await _db.getSetting('turbo_full_scan_minutes') ?? '') ??
@@ -34,6 +36,7 @@ class SettingsStore {
       fastScan: fastScan,
       autoBackup: autoBackup,
       autoSync: autoSync,
+      transferConcurrency: concurrency.clamp(0, 32),
       turboScan: turboScan,
       turboFullScanMinutes: turboMinutes.clamp(15, 1440),
     );
@@ -48,6 +51,8 @@ class SettingsStore {
     await _db.setSetting('fast_scan', s.fastScan ? '1' : '0');
     await _db.setSetting('auto_backup', s.autoBackup ? '1' : '0');
     await _db.setSetting('auto_sync', s.autoSync ? '1' : '0');
+    await _db.setSetting(
+        'transfer_concurrency', s.transferConcurrency.toString());
     await _db.setSetting('turbo_scan', s.turboScan ? '1' : '0');
     await _db.setSetting(
         'turbo_full_scan_minutes', s.turboFullScanMinutes.toString());

@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../models/models.dart';
 import '../nextcloud/client.dart';
+import '../nextcloud/http_clients.dart';
 import '../nextcloud/login_flow.dart';
 import '../store/auth_store.dart';
 import '../store/backup.dart';
@@ -67,6 +68,9 @@ class AppState extends ChangeNotifier {
       db: db,
       client: client,
       deviceName: settings.deviceName,
+      concurrency: settings.transferConcurrency > 0
+          ? settings.transferConcurrency
+          : (HttpClients.cronetAvailable ? 16 : 8),
       conflictPolicy: settings.conflictPolicy,
       fastScan: settings.fastScan,
       turboScan: settings.turboScan,

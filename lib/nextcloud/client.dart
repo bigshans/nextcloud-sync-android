@@ -41,6 +41,9 @@ class NcClient {
   /// Whether this instance owns the client and must close it.
   final bool _ownsClient;
 
+  /// Number of HTTP requests issued by this client (for diagnostics).
+  int requests = 0;
+
   /// True while requests go through Cronet (HTTP/2).
   bool get usingHttp2 =>
       _http != HttpClients.io() && HttpClients.cronetAvailable;
@@ -96,6 +99,7 @@ class NcClient {
     var switchedToIo = false;
     for (var i = 0; i < maxAttempts; i++) {
       try {
+        requests++;
         final resp = await _http.send(build()).timeout(timeout);
         if (resp.statusCode >= 500 && i < maxAttempts - 1) {
           await resp.stream.drain<void>();

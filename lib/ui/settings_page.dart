@@ -123,6 +123,26 @@ class _SettingsPageState extends State<SettingsPage> {
             onChanged: (v) => state.saveSettings(s.copyWith(autoSync: v)),
           ),
           ListTile(
+            leading: const Icon(Icons.speed),
+            title: const Text('并发传输数'),
+            subtitle: const Text('小文件很多时提高并发可明显加速；默认按传输协议自动选择'),
+            trailing: DropdownButton<int>(
+              value: s.transferConcurrency,
+              items: const [
+                DropdownMenuItem(value: 0, child: Text('自动')),
+                DropdownMenuItem(value: 4, child: Text('4')),
+                DropdownMenuItem(value: 8, child: Text('8')),
+                DropdownMenuItem(value: 12, child: Text('12')),
+                DropdownMenuItem(value: 16, child: Text('16')),
+                DropdownMenuItem(value: 24, child: Text('24')),
+              ],
+              onChanged: (v) async {
+                if (v == null) return;
+                await state.saveSettings(s.copyWith(transferConcurrency: v));
+              },
+            ),
+          ),
+          ListTile(
             enabled: s.autoSync,
             leading: const Icon(Icons.timer_outlined),
             title: const Text('后台同步间隔'),

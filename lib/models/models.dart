@@ -335,6 +335,9 @@ class AppSettings {
   /// on very large trees, but edits to existing files (which do not change the
   /// parent folder's mtime) are only picked up by the periodic full scan.
   final bool autoSync;
+
+  /// 0 = pick automatically (16 with HTTP/2, 8 with HTTP/1.1).
+  final int transferConcurrency;
   final bool turboScan;
 
   /// How often a full scan runs even in turbo mode.
@@ -349,6 +352,7 @@ class AppSettings {
     this.fastScan = true,
     this.autoBackup = true,
     this.autoSync = true,
+    this.transferConcurrency = 0,
     this.turboScan = false,
     this.turboFullScanMinutes = 60,
   });
@@ -362,6 +366,7 @@ class AppSettings {
     bool? fastScan,
     bool? autoBackup,
     bool? autoSync,
+    int? transferConcurrency,
     bool? turboScan,
     int? turboFullScanMinutes,
   }) =>
@@ -374,6 +379,8 @@ class AppSettings {
         fastScan: fastScan ?? this.fastScan,
         autoBackup: autoBackup ?? this.autoBackup,
         autoSync: autoSync ?? this.autoSync,
+        transferConcurrency:
+            transferConcurrency ?? this.transferConcurrency,
         turboScan: turboScan ?? this.turboScan,
         turboFullScanMinutes:
             turboFullScanMinutes ?? this.turboFullScanMinutes,

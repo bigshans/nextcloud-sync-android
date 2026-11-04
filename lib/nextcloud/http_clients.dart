@@ -21,7 +21,9 @@ class HttpClients {
         HttpClient()
           ..maxConnectionsPerHost = 16
           ..connectionTimeout = const Duration(seconds: 20)
-          ..idleTimeout = const Duration(seconds: 60),
+          // Keep sockets warm between syncs: TLS handshakes are the main
+          // per-file cost for lots of tiny files.
+          ..idleTimeout = const Duration(minutes: 5),
       );
 
   static bool get cronetAvailable => _cronetTried && _cronet != null;

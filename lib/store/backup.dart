@@ -47,6 +47,7 @@ class BackupBundle {
           'fastScan': settings.fastScan,
           'autoBackup': settings.autoBackup,
           'autoSync': settings.autoSync,
+          'transferConcurrency': settings.transferConcurrency,
           'turboScan': settings.turboScan,
           'turboFullScanMinutes': settings.turboFullScanMinutes,
         },
@@ -105,6 +106,8 @@ class BackupBundle {
         fastScan: (s['fastScan'] as bool?) ?? true,
         autoBackup: (s['autoBackup'] as bool?) ?? true,
         autoSync: (s['autoSync'] as bool?) ?? true,
+        transferConcurrency:
+            ((s['transferConcurrency'] as num?)?.toInt() ?? 0).clamp(0, 32),
         turboScan: (s['turboScan'] as bool?) ?? false,
         turboFullScanMinutes:
             ((s['turboFullScanMinutes'] as num?)?.toInt() ?? 60)

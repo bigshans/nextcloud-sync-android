@@ -4,6 +4,7 @@ import 'package:workmanager/workmanager.dart';
 
 import '../models/models.dart';
 import '../nextcloud/client.dart';
+import '../nextcloud/http_clients.dart';
 import '../store/auth_store.dart';
 import '../store/db.dart';
 import '../store/settings_store.dart';
@@ -64,6 +65,9 @@ class Scheduler {
       db: db,
       client: client,
       deviceName: settings.deviceName,
+      concurrency: settings.transferConcurrency > 0
+          ? settings.transferConcurrency
+          : (HttpClients.cronetAvailable ? 16 : 8),
       conflictPolicy: settings.conflictPolicy,
       fastScan: settings.fastScan,
       turboScan: settings.turboScan,
