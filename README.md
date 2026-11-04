@@ -91,6 +91,22 @@ flutter build apk --release
 如果「TLS 握手」失败而手机浏览器可以打开同一个地址，基本可以确定是网络中间设备的问题：
 切换 Wi-Fi/移动数据、关闭 VPN/代理、校准系统时间后重试。应用本身对握手失败会自动重试 6 次（指数退避）。
 
+## 隐私与安全
+
+- 只保存 **应用密码**（不保存账号密码），存放在 Android Keystore 加密存储中
+- 不写日志、不写数据库；自动备份默认**不含**密码
+- 无遥测、无第三方接口，也不会绕过 TLS 校验
+- 详见 `SECURITY.md`
+
+## 免责声明
+
+本项目是个人开发的**非官方**客户端，与 Nextcloud GmbH 无关联。
+Nextcloud 是 Nextcloud GmbH 的商标，仅用于说明兼容对象。
+
+## 许可证
+
+MIT，见 `LICENSE`。
+
 ## 已知限制
 
 - 单账号（多账号未实现）
@@ -108,8 +124,12 @@ flutter test                      # 单元测试 + 对真服务器的客户端/�
 
 测试用的真实服务器基准：
 
+真实服务器测试默认跳过；提供凭据后才运行（任选其一）：
+
 ```bash
-# 凭据来自 ~/.config/ncsync/test_creds.json（Login Flow 辅助写入，勿提交）
+# 方式一：环境变量
+export NC_SERVER=https://cloud.example.com NC_USER=alice NC_PASS='app-password'
+# 方式二：~/.config/ncsync/test_creds.json（本地文件，已被 .gitignore 忽略）
 flutter test test/engine_live_test.dart      # 引擎端到端（真实服务器）
 flutter test test/client_live_test.dart      # WebDAV 客户端（真实服务器）
 

@@ -1,22 +1,19 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:nextcloud_sync/nextcloud/client.dart';
 
+import 'live_creds.dart';
+
 /// Live test against the configured Nextcloud instance.
 /// Credentials are read from ~/.config/ncsync/test_creds.json (written by the
 /// Login Flow v2 helper). Skipped when that file does not exist.
 void main() {
-  final credFile = File('${Platform.environment['HOME']}/.config/ncsync/test_creds.json');
-  final creds = credFile.existsSync()
-      ? jsonDecode(credFile.readAsStringSync()) as Map<String, dynamic>
-      : null;
-
-  final server = creds?['server'] as String?;
-  final user = creds?['loginName'] as String?;
-  final pass = creds?['appPassword'] as String?;
+  final creds = LiveCreds.load();
+  final server = creds?.server;
+  final user = creds?.username;
+  final pass = creds?.appPassword;
 
   group('live', () {
     late NcClient client;

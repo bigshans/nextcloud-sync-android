@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +6,8 @@ import 'package:nextcloud_sync/nextcloud/client.dart';
 import 'package:nextcloud_sync/store/db.dart';
 import 'package:nextcloud_sync/sync/engine.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import 'live_creds.dart';
 
 /// Full engine test against the real Nextcloud server, running on the host.
 /// Uses an ffI sqlite database and a temporary local folder.
@@ -17,11 +18,7 @@ void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 
-  final credFile = File(
-      '${Platform.environment['HOME']}/.config/ncsync/test_creds.json');
-  final creds = credFile.existsSync()
-      ? jsonDecode(credFile.readAsStringSync()) as Map<String, dynamic>
-      : null;
+  final creds = LiveCreds.load();
 
   group('engine live', () {
     late NcClient client;
@@ -37,9 +34,9 @@ void main() {
       final work = Directory.systemTemp.createTempSync('ncsync-engine');
       db = AppDb.withDirectory(work.path);
       client = NcClient(
-        server: creds['server'] as String,
-        username: creds['loginName'] as String,
-        appPassword: creds['appPassword'] as String,
+        server: creds.server,
+        username: creds.username,
+        appPassword: creds.appPassword,
       );
       engine = SyncEngine(
         db: db,

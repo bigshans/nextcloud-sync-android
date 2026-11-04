@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -8,26 +7,24 @@ import 'package:nextcloud_sync/store/db.dart';
 import 'package:nextcloud_sync/sync/engine.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'live_creds.dart';
+
 /// Pausing must stop after the current file, keep the already-synced state and
 /// let a later run continue without re-uploading finished files.
 void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 
-  final credFile = File(
-      '${Platform.environment['HOME']}/.config/ncsync/test_creds.json');
-  final creds = credFile.existsSync()
-      ? jsonDecode(credFile.readAsStringSync()) as Map<String, dynamic>
-      : null;
+  final creds = LiveCreds.load();
 
   test('pause and resume a running sync', () async {
     if (creds == null) return;
     final work = Directory.systemTemp.createTempSync('ncsync-pause');
     final db = AppDb.withDirectory(work.path);
     final client = NcClient(
-      server: creds['server'] as String,
-      username: creds['loginName'] as String,
-      appPassword: creds['appPassword'] as String,
+      server: creds.server,
+      username: creds.username,
+      appPassword: creds.appPassword,
     );
     final engine = SyncEngine(db: db, client: client, deviceName: 'pause-test');
     final local = Directory('${work.path}/local')..createSync(recursive: true);

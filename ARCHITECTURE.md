@@ -16,8 +16,8 @@ Flutter 单端 Android 应用，做「本地目录 ↔ Nextcloud 目录」的双
 
 ## 环境
 
-- Nextcloud `35.0.2`（`https://cloud.example.com`），Login Flow v2 可用
-- 测试设备：Android 16 (SDK 36) arm64，`192.0.2.10:5555`
+- Nextcloud `35.0.2`（示例：`https://cloud.example.com`），Login Flow v2 可用
+- 测试设备：Android 16 (SDK 36) arm64（网络 adb）
 - Flutter 3.32.8 / Dart 3.8.1，Android SDK 36
 
 ## 模块划分

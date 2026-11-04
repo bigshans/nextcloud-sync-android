@@ -20,3 +20,8 @@ android/key.properties
 .env
 secrets/
 *.secret.json
+
+# Crash dumps / logs
+*.log
+hs_err_pid*
+core.*
