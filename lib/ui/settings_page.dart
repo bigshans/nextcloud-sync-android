@@ -115,7 +115,15 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
           ),
+          SwitchListTile(
+            secondary: const Icon(Icons.schedule_send_outlined),
+            title: const Text('后台定时同步'),
+            subtitle: const Text('关闭后只在手动点击时同步（不会取消正在进行的同步）'),
+            value: s.autoSync,
+            onChanged: (v) => state.saveSettings(s.copyWith(autoSync: v)),
+          ),
           ListTile(
+            enabled: s.autoSync,
             leading: const Icon(Icons.timer_outlined),
             title: const Text('后台同步间隔'),
             subtitle: const Text('Android 限制最短 15 分钟，系统可能延后执行'),

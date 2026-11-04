@@ -27,6 +27,7 @@ class Scheduler {
   static Future<void> schedule(AppSettings settings) async {
     await init();
     await Workmanager().cancelByUniqueName(kPeriodicUnique);
+    if (!settings.autoSync) return; // scheduled sync disabled by the user
     await Workmanager().registerPeriodicTask(
       kPeriodicUnique,
       kSyncTask,

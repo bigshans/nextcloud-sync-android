@@ -159,4 +159,7 @@ RECEIVE_BOOT_COMPLETED（重排周期任务）
 - 远程扫描短路：配对根的 Depth-0 etag 与上次相同时，直接用基线作为远程快照（1 个请求）
 - 本地扫描：顶层条目按 8 个一组分片，`Isolate.run` 并行 + 同步 syscall（`listSync`/`statSync`）
 - 无变化条目不写库：`refresh` 动作在基线完全一致时跳过 upsert
+- 条件上传（If-Match）返回 412 时立即 re-stat 并按策略处理（内容一致→按已上传；远程较新→下载；否则覆盖上传），避免每轮重复 412
+- 传输进度：`SyncProgress.active` 暴露并发中的文件（文件名/字节数），引擎按 150ms 节流推送
+- HTTP 传输层：优先内嵌 Cronet（HTTP/2 / QUIC），失败自动回退 dart:io HTTP/1.1；>32MB 文件始终走 dart:io 流式上传
 - 冲突页的三个选项在「一侧已删除」时语义为：保留本地=删远程；保留远程=删本地

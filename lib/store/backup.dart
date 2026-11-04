@@ -46,6 +46,7 @@ class BackupBundle {
           'conflictPolicy': settings.conflictPolicy.name,
           'fastScan': settings.fastScan,
           'autoBackup': settings.autoBackup,
+          'autoSync': settings.autoSync,
           'turboScan': settings.turboScan,
           'turboFullScanMinutes': settings.turboFullScanMinutes,
         },
@@ -103,6 +104,7 @@ class BackupBundle {
         ),
         fastScan: (s['fastScan'] as bool?) ?? true,
         autoBackup: (s['autoBackup'] as bool?) ?? true,
+        autoSync: (s['autoSync'] as bool?) ?? true,
         turboScan: (s['turboScan'] as bool?) ?? false,
         turboFullScanMinutes:
             ((s['turboFullScanMinutes'] as num?)?.toInt() ?? 60)

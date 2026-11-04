@@ -42,6 +42,8 @@ class SyncEngine {
   final bool turboScan;
   final int turboFullScanMinutes;
 
+  static bool _isUpload(ActionKind k) => k == ActionKind.upload;
+
   static bool _isTransfer(ActionKind k) =>
       k == ActionKind.upload ||
       k == ActionKind.download ||
@@ -69,15 +71,40 @@ class SyncEngine {
     SyncCancelToken? cancel,
   }) async {
     final report = _ReportBuilder(pair);
+    final active = <String, ActiveTransfer>{};
+    var lastDone = 0;
+    var lastTotal = 0;
+    var lastPhase = '准备';
+    var lastEmit = 0;
+
+    void emit({bool force = false}) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (!force && now - lastEmit < 150) return;
+      lastEmit = now;
+      onProgress?.call(SyncProgress(
+        phase: lastPhase,
+        done: lastDone,
+        total: lastTotal,
+        current: active.values.isEmpty ? null : active.values.first.path,
+        pairName: pair.name,
+        active: active.values.map((a) => ActiveTransfer(
+              a.path,
+              a.kind,
+              a.done,
+              a.total,
+            )).toList(),
+        uploaded: report.uploaded,
+        downloaded: report.downloaded,
+        deleted: report.deleted,
+        failed: report.errors,
+      ));
+    }
 
     void progress(String phase, {int done = 0, int total = 0, String? current}) {
-      onProgress?.call(SyncProgress(
-        phase: phase,
-        done: done,
-        total: total,
-        current: current,
-        pairName: pair.name,
-      ));
+      lastPhase = phase;
+      if (done > 0) lastDone = done;
+      if (total > 0) lastTotal = total;
+      emit(force: true);
     }
 
     try {
@@ -240,12 +267,35 @@ class SyncEngine {
       Future<void> run(SyncAction action) async {
         switch (action.kind) {
           case ActionKind.upload:
-            await _doUpload(pair, action, baseline, rows, dropKeys);
-            report.uploaded++;
+            final becameDownload = await _doUpload(
+                pair, action, baseline, rows, dropKeys,
+                onBytes: (done, total) {
+              final t = active['upload|${action.path}'];
+              if (t != null) {
+                t.done = done;
+                t.total = total;
+                emit();
+              }
+            });
+            if (becameDownload) {
+              report.downloaded++;
+            } else {
+              report.uploaded++;
+            }
+            emit(force: true);
             break;
           case ActionKind.download:
-            await _doDownload(pair, action, remote, rows, dropKeys);
+            await _doDownload(pair, action, remote, rows, dropKeys,
+                onBytes: (done, total) {
+              final t = active['download|${action.path}'];
+              if (t != null) {
+                t.done = done;
+                t.total = total;
+                emit();
+              }
+            });
             report.downloaded++;
+            emit(force: true);
             break;
           case ActionKind.makeRemoteDir:
             await _ensureRemoteDir(pair, action.path);
@@ -336,6 +386,9 @@ class SyncEngine {
             pool.releaseIdle();
             break;
           }
+          final key =
+              '${_isUpload(action.kind) ? 'upload' : 'download'}|${action.path}';
+          active[key] = ActiveTransfer(action.path, _verb(action.kind));
           pool.submit(() async {
             progress('同步',
                 done: done,
@@ -345,8 +398,11 @@ class SyncEngine {
               await run(action);
             } catch (e) {
               await onError(action, e);
+              emit(force: true);
             }
+            active.remove(key);
             done++;
+            emit(force: true);
           });
         } else {
           // Ordering barrier: let queued transfers finish first.
@@ -651,13 +707,16 @@ class SyncEngine {
 
   // ------------------------------------------------------------- file actions
 
-  Future<void> _doUpload(
+  /// Returns true when the file ended up being downloaded instead (a 412 was
+  /// resolved in favour of the remote version).
+  Future<bool> _doUpload(
     Pair pair,
     SyncAction action,
     Map<String, Baseline> baseline,
     List<Map<String, Object?>> rows,
-    Set<String> dropKeys,
-  ) async {
+    Set<String> dropKeys, {
+    void Function(int done, int total)? onBytes,
+  }) async {
     final path = normalizeRel(action.path);
     final abs = localJoin(pair.localPath, path);
     final file = File(abs);
@@ -667,8 +726,25 @@ class SyncEngine {
     await _ensureRemoteDir(pair, parentOf(path));
     final base = baseline[pathKey(path)];
     final ifMatch = base != null && !base.isDir ? base.etag : null;
-    final remote = await client.upload(file, _remotePath(pair, path),
-        ifMatch: ifMatch);
+    RemoteEntry? r;
+    var becameDownload = false;
+    try {
+      r = await client.upload(file, _remotePath(pair, path),
+          ifMatch: ifMatch, onProgress: onBytes);
+    } on NcException catch (e) {
+      // 412 = the remote file changed since our last sync. Resolve it right
+      // away with the configured policy instead of failing and retrying on
+      // every later pass (that produced a storm of 412s before).
+      if (e.statusCode != 412) rethrow;
+      r = await _recoverFrom412(pair, path, file,
+          onBytes: onBytes,
+          onDownloaded: () {
+            becameDownload = true;
+          });
+      if (r == null) {
+        throw NcException('冲突处理失败: /$path', statusCode: 412);
+      }
+    }
     final st = await file.stat();
     rows.add(_row(path,
         isDir: false,
@@ -677,8 +753,48 @@ class SyncEngine {
             isDir: false,
             size: st.size,
             mtimeMs: st.modified.millisecondsSinceEpoch),
-        r: remote));
+        r: r));
     dropKeys.remove(pathKey(path));
+    return becameDownload;
+  }
+
+  /// Reconciles a failed conditional upload (HTTP 412).
+  Future<RemoteEntry?> _recoverFrom412(
+    Pair pair,
+    String path,
+    File file, {
+    void Function(int done, int total)? onBytes,
+    required void Function() onDownloaded,
+  }) async {
+    final remotePath = _remotePath(pair, path);
+    final remoteNow = await client.stat(remotePath);
+    final st = await file.stat();
+    if (remoteNow == null) {
+      // The remote copy vanished: just upload.
+      return client.upload(file, remotePath, onProgress: onBytes);
+    }
+    final sameSize = remoteNow.size != null && remoteNow.size == st.size;
+    final mtimeClose = remoteNow.mtimeMs == null ||
+        (remoteNow.mtimeMs! - st.modified.millisecondsSinceEpoch).abs() <=
+            2000;
+    if (sameSize && mtimeClose) {
+      // Our earlier attempt actually landed (e.g. a retry after a timeout).
+      await db.log(
+          pair.id, 'debug', '上传 /$path 返回 412，但远端内容一致，按已上传处理');
+      return remoteNow;
+    }
+    final remoteIsNewer = remoteNow.mtimeMs != null &&
+        remoteNow.mtimeMs! > st.modified.millisecondsSinceEpoch + 1000;
+    final keepRemote = conflictPolicy == ConflictPolicy.preferRemote ||
+        (conflictPolicy == ConflictPolicy.newest && remoteIsNewer);
+    if (keepRemote) {
+      await client.download(remotePath, file);
+      onDownloaded();
+      await db.log(pair.id, 'info', '上传 /$path 冲突（412），按策略保留远程版本');
+      return remoteNow;
+    }
+    await db.log(pair.id, 'info', '上传 /$path 返回 412，按策略覆盖远程');
+    return client.upload(file, remotePath, onProgress: onBytes);
   }
 
   Future<void> _doDownload(
@@ -686,12 +802,14 @@ class SyncEngine {
     SyncAction action,
     Map<String, RemoteEntry> remote,
     List<Map<String, Object?>> rows,
-    Set<String> dropKeys,
-  ) async {
+    Set<String> dropKeys, {
+    void Function(int done, int total)? onBytes,
+  }) async {
     final path = normalizeRel(action.path);
     final abs = localJoin(pair.localPath, path);
     final file = File(abs);
-    final etag = await client.download(_remotePath(pair, path), file);
+    final etag = await client.download(_remotePath(pair, path), file,
+        onProgress: onBytes);
     final st = await file.stat();
     final snap = remote[pathKey(path)];
     rows.add(_row(path,

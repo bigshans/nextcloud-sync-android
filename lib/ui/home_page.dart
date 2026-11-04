@@ -329,25 +329,32 @@ class _ProgressCard extends StatelessWidget {
   final VoidCallback onResume;
   final VoidCallback onDismiss;
 
+  /// Keeps the end of a long path visible ("…/journals/2025_05_09/202...").
+  static String tail(String path, int max) =>
+      path.length <= max ? path : '…${path.substring(path.length - max)}';
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final active = progress.active.take(3).toList();
     return Card(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Text(progress.pairName ?? '',
-                    style: theme.textTheme.titleSmall),
-                const Spacer(),
+                Expanded(
+                  child: Text(progress.pairName ?? '',
+                      style: theme.textTheme.titleSmall,
+                      overflow: TextOverflow.ellipsis),
+                ),
                 Text(progress.phase,
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.outline)),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
                 if (syncing && !paused)
                   TextButton.icon(
                     onPressed: onPause,
@@ -368,23 +375,110 @@ class _ProgressCard extends StatelessWidget {
                 ],
               ],
             ),
-            const SizedBox(height: 10),
-            LinearProgressIndicator(
-              value: progress.fraction,
-              minHeight: 6,
+            const SizedBox(height: 2),
+            Text(
+              '上传 ${progress.uploaded} · 下载 ${progress.downloaded}'
+              ' · 删除 ${progress.deleted}'
+              '${progress.failed > 0 ? ' · 失败 ${progress.failed}' : ''}',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.outline),
             ),
             const SizedBox(height: 8),
-            Text(
-              progress.current ??
-                  (progress.total > 0
+            Row(
+              children: [
+                Expanded(
+                  child: LinearProgressIndicator(
+                    value: progress.fraction,
+                    minHeight: 5,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  progress.total > 0
                       ? '${progress.done}/${progress.total}'
-                      : '已处理 ${progress.done} 项'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall,
+                      : '${progress.done}',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ],
             ),
+            if (active.isEmpty && progress.current != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  tail(progress.current!, 60),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
+            for (final t in active) _ActiveRow(transfer: t),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ActiveRow extends StatelessWidget {
+  const _ActiveRow({required this.transfer});
+  final ActiveTransfer transfer;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final slash = transfer.path.lastIndexOf('/');
+    final name = slash < 0 ? transfer.path : transfer.path.substring(slash + 1);
+    final parent = slash < 0 ? '' : transfer.path.substring(0, slash);
+    final isUpload = transfer.kind.contains('上');
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            isUpload ? Icons.upload : Icons.download,
+            size: 16,
+            color: theme.colorScheme.primary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodyMedium),
+                    ),
+                    if (transfer.total > 0)
+                      Text(
+                        '${formatBytes(transfer.done)} / ${formatBytes(transfer.total)}',
+                        style: theme.textTheme.labelSmall
+                            ?.copyWith(color: theme.colorScheme.outline),
+                      ),
+                  ],
+                ),
+                if (parent.isNotEmpty)
+                  Text(
+                    _ProgressCard.tail(parent, 52),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: theme.colorScheme.outline),
+                  ),
+                const SizedBox(height: 4),
+                LinearProgressIndicator(
+                  value: transfer.fraction,
+                  minHeight: 3,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
     );
   }

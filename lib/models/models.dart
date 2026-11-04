@@ -282,19 +282,42 @@ class SyncCancelToken {
   }
 }
 
+/// One file currently being transferred (parallel transfers run at once).
+class ActiveTransfer {
+  final String path;
+  final String kind; // upload / download / conflict
+  int done;
+  int total;
+  ActiveTransfer(this.path, this.kind, [this.done = 0, this.total = 0]);
+
+  double? get fraction => total > 0 ? done / total : null;
+}
+
 class SyncProgress {
   final String phase;
   final int done;
   final int total;
   final String? current;
   final String? pairName;
+  final List<ActiveTransfer> active;
+  final int uploaded;
+  final int downloaded;
+  final int deleted;
+  final int failed;
+
   const SyncProgress({
     required this.phase,
     this.done = 0,
     this.total = 0,
     this.current,
     this.pairName,
+    this.active = const [],
+    this.uploaded = 0,
+    this.downloaded = 0,
+    this.deleted = 0,
+    this.failed = 0,
   });
+
   double? get fraction => total > 0 ? done / total : null;
 }
 
@@ -311,6 +334,7 @@ class AppSettings {
   /// Trust directory mtimes to skip re-reading unchanged folders. Much faster
   /// on very large trees, but edits to existing files (which do not change the
   /// parent folder's mtime) are only picked up by the periodic full scan.
+  final bool autoSync;
   final bool turboScan;
 
   /// How often a full scan runs even in turbo mode.
@@ -324,6 +348,7 @@ class AppSettings {
     this.conflictPolicy = ConflictPolicy.newest,
     this.fastScan = true,
     this.autoBackup = true,
+    this.autoSync = true,
     this.turboScan = false,
     this.turboFullScanMinutes = 60,
   });
@@ -336,6 +361,7 @@ class AppSettings {
     ConflictPolicy? conflictPolicy,
     bool? fastScan,
     bool? autoBackup,
+    bool? autoSync,
     bool? turboScan,
     int? turboFullScanMinutes,
   }) =>
@@ -347,6 +373,7 @@ class AppSettings {
         conflictPolicy: conflictPolicy ?? this.conflictPolicy,
         fastScan: fastScan ?? this.fastScan,
         autoBackup: autoBackup ?? this.autoBackup,
+        autoSync: autoSync ?? this.autoSync,
         turboScan: turboScan ?? this.turboScan,
         turboFullScanMinutes:
             turboFullScanMinutes ?? this.turboFullScanMinutes,
